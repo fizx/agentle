@@ -1,0 +1,16 @@
+- Please organize the javascript.  build components, not just html.
+- use typescript not javascript.  please port.
+- please make contribution easier by organizing the golang folders so that it's clear how to provide a file implementing e.g. a new trigger, callable, etc.
+- likewise, for the stdlib, structure it so its easy to inspect the layout.
+- SQL logic error: no such column: scope (1)
+- i dont see the shell example.  can you add it to the examples in the ui?
+- For actors, on one inbox message, that means we could run the script multiple times in order to finish all RPCs. The next inbox message is waiting until the full script finishes.  Please add a yield, where that's a blocking rpc point that pops the next message in the inbox into the middle of the flow.
+- result appears as [object Object], not pretty-print json
+- can we get timeline/dependency view of the traces?
+- parallel map example
+- http example
+- example of message passing
+- example of yield making an inner llm-agent loop
+- shouldn't be able to delete self from users
+- users should only be able to see their own scripts and runs.  admins too, but they can select into a user's view.
+- prefer exposing "workspace" terminology instead of actor to the user.
