@@ -1,38 +1,37 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import { api } from '../api.js'
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../api'
+import type { ToolConfig } from '../types'
 
-const CONFIG_TEMPLATES = {
+const CONFIG_TEMPLATES: Record<string, string> = {
   llm: '{\n  "base_url": "",\n  "model": "gpt-4o-mini"\n}',
   http: '{\n  "allow": ["api.github.com", "*.example.com"],\n  "auth_header": "Authorization"\n}',
   shell: '{}',
 }
 
 export default function Settings() {
-  const [secrets, setSecrets] = useState([])
-  const [configs, setConfigs] = useState([])
+  const [secrets, setSecrets] = useState<string[]>([])
+  const [configs, setConfigs] = useState<ToolConfig[]>([])
   const [msg, setMsg] = useState('')
   const [err, setErr] = useState('')
 
   const refresh = useCallback(async () => {
     setErr('')
-    try {
-      const s = await api.listSecrets() // global scope (admin)
-      setSecrets(s.names || [])
-    } catch (e) { setErr(e.message) }
-    setConfigs(await api.listConfigs() || [])
+    try { setSecrets((await api.listSecrets()).names || []) }
+    catch (e) { setErr((e as Error).message) }
+    setConfigs((await api.listConfigs()) || [])
   }, [])
   useEffect(() => { refresh() }, [refresh])
 
-  const toast = (m) => { setMsg(m); setTimeout(() => setMsg(''), 2500) }
+  const toast = (m: string) => { setMsg(m); setTimeout(() => setMsg(''), 2500) }
 
   const [sName, setSName] = useState('')
   const [sVal, setSVal] = useState('')
   const addSecret = async () => {
     if (!sName) return
     try { await api.putSecret(sName, sVal); setSName(''); setSVal(''); toast('secret saved'); refresh() }
-    catch (e) { toast(e.message) }
+    catch (e) { toast((e as Error).message) }
   }
-  const delSecret = async (n) => { await api.deleteSecret(n); refresh() }
+  const delSecret = async (n: string) => { await api.deleteSecret(n); refresh() }
 
   const [cId, setCId] = useState('')
   const [cCap, setCCap] = useState('llm')
@@ -40,12 +39,12 @@ export default function Settings() {
   const [cSecret, setCSecret] = useState('')
   const addConfig = async () => {
     if (!cId) return toast('config id required')
-    let config
+    let config: unknown
     try { config = JSON.parse(cCfg) } catch { return toast('config JSON invalid') }
     await api.putConfig({ id: cId, capability: cCap, config, secret_ref: cSecret })
     setCId(''); toast('config saved'); refresh()
   }
-  const onCapChange = (cap) => { setCCap(cap); setCCfg(CONFIG_TEMPLATES[cap] || '{}') }
+  const onCapChange = (cap: string) => { setCCap(cap); setCCfg(CONFIG_TEMPLATES[cap] || '{}') }
 
   return (
     <div className="main" style={{ maxWidth: 980, margin: '0 auto' }}>

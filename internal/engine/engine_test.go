@@ -203,8 +203,8 @@ func TestFenceRejectsStaleWriter(t *testing.T) {
 	ls, log, env := newHarness(t, ce)
 	ctx := context.Background()
 
-	stale, _ := ls.Acquire(ctx, "e1")     // token N
-	_, _ = ls.Acquire(ctx, "e1")          // token N+1 steals ownership
+	stale, _ := ls.Acquire(ctx, "e1") // token N
+	_, _ = ls.Acquire(ctx, "e1")      // token N+1 steals ownership
 	m := NewMediator("e1", log, stale, env, nil, nil)
 	_, err := m.Call(ctx, inv("get", `1`))
 	if !errors.Is(err, ErrLost) && !errors.Is(err, ErrFenced) {

@@ -1,105 +1,92 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import CodeMirror from '@uiw/react-codemirror'
-import { python } from '@codemirror/lang-python'
-import { autocompletion } from '@codemirror/autocomplete'
-import { api, STATUS, BUILTINS, CRON_PRESETS } from '../api.js'
+import { useCallback, useEffect, useState } from 'react'
+import { api, type GrantRefInput } from '../api'
+import type { Example, Execution, ScriptDetail, Script, ToolConfig, Trigger } from '../types'
+import { CRON_PRESETS } from '../types'
+import { StatusBadge } from '../components/Badge'
+import { Json } from '../components/Json'
+import { CodeEditor } from '../components/CodeEditor'
 
-const STARTER = `# main(input) is the entry point. input is the event envelope:
-#   {id, kind, trigger_id, actor, data}  — data is what the caller provided.
-# Capabilities (log, store/fetch, llm, http_*, shell, ...) are memoized RPCs.
-def main(input):
-    name = (input.get("data") or {}).get("name", "world")
-    log("hello", name)
-    reply = llm([{"role": "user", "content": "Greet " + name}])
-    return {"reply": reply["content"]}
-`
+type Sub = 'editor' | 'runs' | 'triggers' | 'secrets'
 
-const completion = autocompletion({
-  override: [(ctx) => {
-    const word = ctx.matchBefore(/\w*/)
-    if (!word || (word.from === word.to && !ctx.explicit)) return null
-    return { from: word.from, options: BUILTINS.map((b) => ({ label: b, type: 'function' })) }
-  }],
-})
-
-export default function Scripts({ onOpenRun, me }) {
-  const [scripts, setScripts] = useState([])
-  const [sel, setSel] = useState(null)
-  const [detail, setDetail] = useState(null)
-  const [configs, setConfigs] = useState([])
+export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void }) {
+  const [scripts, setScripts] = useState<Script[]>([])
+  const [sel, setSel] = useState<string | null>(null)
+  const [detail, setDetail] = useState<ScriptDetail | null>(null)
+  const [configs, setConfigs] = useState<ToolConfig[]>([])
+  const [names, setNames] = useState<string[]>([])
   const [source, setSource] = useState('')
-  const [grants, setGrants] = useState([])
+  const [grants, setGrants] = useState<string[]>([])
   const [input, setInput] = useState('{\n  "name": "kyle"\n}')
-  const [result, setResult] = useState(null)
+  const [result, setResult] = useState<Execution | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
-  const [sub, setSub] = useState('editor')
+  const [sub, setSub] = useState<Sub>('editor')
   const [limit, setLimit] = useState(20)
+  const [picking, setPicking] = useState(false)
 
   const refresh = useCallback(async () => {
-    setScripts(await api.listScripts(limit, 0) || [])
-    setConfigs(await api.listConfigs() || [])
+    setScripts((await api.listScripts(limit, 0)) || [])
+    setConfigs((await api.listConfigs()) || [])
+    setNames((await api.capabilities()).map((c) => c.name))
   }, [limit])
   useEffect(() => { refresh() }, [refresh])
 
-  const select = async (id) => {
-    setSel(id); setResult(null); setErr(''); setSub('editor')
+  const select = async (id: string) => {
+    setSel(id); setResult(null); setErr(''); setSub('editor'); setPicking(false)
     const d = await api.getScript(id)
     setDetail(d)
-    const latest = d.versions && d.versions[0]
-    setSource(latest ? latest.source : STARTER)
+    const latest = d.versions?.[0]
+    setSource(latest ? latest.source : '')
     setGrants(latest ? (latest.grants || []).map((g) => g.config_id) : [])
   }
 
-  const newScript = async () => {
-    const name = prompt('Script name?')
-    if (!name) return
-    const sc = await api.createScript(name, STARTER)
+  const createFrom = async (name: string, src: string) => {
+    const sc = await api.createScript(name, src)
+    setPicking(false)
     await refresh(); select(sc.id)
   }
 
   const save = async () => {
+    if (!sel) return
     setBusy(true); setErr('')
     try {
-      const grantRefs = grants
-        .map((cid) => configs.find((c) => c.id === cid)).filter(Boolean)
+      const grantRefs: GrantRefInput[] = grants
+        .map((cid) => configs.find((c) => c.id === cid))
+        .filter((c): c is ToolConfig => !!c)
         .map((c) => ({ capability: c.capability, config_id: c.id }))
       await api.saveVersion(sel, source, grantRefs)
       await select(sel)
-    } catch (e) { setErr(e.message) } finally { setBusy(false) }
+    } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
 
   const run = async () => {
+    if (!sel) return
     setBusy(true); setErr(''); setResult(null)
-    let parsed
+    let parsed: unknown
     try { parsed = input.trim() ? JSON.parse(input) : null }
-    catch (e) { setErr('input is not valid JSON: ' + e.message); setBusy(false); return }
+    catch (e) { setErr('input is not valid JSON: ' + (e as Error).message); setBusy(false); return }
     try { setResult(await api.run(sel, parsed)) }
-    catch (e) { setErr(e.message) } finally { setBusy(false) }
+    catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
 
   const del = async () => {
-    if (!confirm('Delete this script and its versions/triggers?')) return
+    if (!sel || !confirm('Delete this script and its versions/triggers?')) return
     await api.deleteScript(sel)
     setSel(null); setDetail(null); refresh()
   }
 
-  const restore = async (v) => {
-    await api.restoreVersion(sel, v)
-    await select(sel)
-  }
-
-  const toggleGrant = (cid) =>
+  const restore = async (v: number) => { if (sel) { await api.restoreVersion(sel, v); await select(sel) } }
+  const toggleGrant = (cid: string) =>
     setGrants((g) => g.includes(cid) ? g.filter((x) => x !== cid) : [...g, cid])
 
-  const subTabs = ['editor', 'runs', 'triggers', 'secrets']
+  const subTabs: Sub[] = ['editor', 'runs', 'triggers', 'secrets']
 
   return (
     <div className="layout">
       <div className="sidebar">
         <div className="row spread" style={{ marginBottom: 8 }}>
           <strong>Scripts</strong>
-          <button onClick={newScript}>+ New</button>
+          <button onClick={() => { setPicking(true); setSel(null); setDetail(null) }}>+ New</button>
         </div>
         {scripts.map((s) => (
           <div key={s.id} className={'list-item' + (s.id === sel ? ' active' : '')} onClick={() => select(s.id)}>
@@ -112,7 +99,8 @@ export default function Scripts({ onOpenRun, me }) {
       </div>
 
       <div className="main">
-        {!sel && <div className="muted">Select or create a script to begin.</div>}
+        {picking && <ExampleGallery onCreate={createFrom} onCancel={() => setPicking(false)} />}
+        {!sel && !picking && <div className="muted">Select a script, or click + New to start from an example.</div>}
         {sel && detail && (
           <>
             <div className="row spread">
@@ -136,8 +124,7 @@ export default function Scripts({ onOpenRun, me }) {
                     <button className="primary" onClick={run} disabled={busy}>Run</button>
                   </div>
                 </div>
-                <CodeMirror value={source} height="340px" theme="dark"
-                  extensions={[python(), completion]} onChange={setSource} />
+                <CodeEditor value={source} onChange={setSource} names={names} />
 
                 <div className="grid2" style={{ marginTop: 14 }}>
                   <div className="card">
@@ -149,7 +136,7 @@ export default function Scripts({ onOpenRun, me }) {
                         <span className="mono">{c.id}</span><span className="muted">({c.capability})</span>
                       </label>
                     ))}
-                    <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>log, time, rand and store/fetch are always available.</div>
+                    <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>log, time, rand, store/fetch and send/recv are always available.</div>
                   </div>
                   <div className="card">
                     <h3>Run input → event.data (JSON)</h3>
@@ -161,11 +148,11 @@ export default function Scripts({ onOpenRun, me }) {
                 {result && (
                   <div className="card">
                     <div className="row spread">
-                      <h3>Result <span className={'badge ' + STATUS[result.status]}>{STATUS[result.status]}</span></h3>
+                      <h3>Result <StatusBadge status={result.status} /></h3>
                       <a onClick={() => onOpenRun(result.id)}>view trace →</a>
                     </div>
                     {result.error && <pre className="err">{result.error}</pre>}
-                    {result.output && <pre>{pretty(result.output)}</pre>}
+                    {result.output !== undefined && <Json value={result.output} />}
                   </div>
                 )}
 
@@ -197,22 +184,52 @@ export default function Scripts({ onOpenRun, me }) {
   )
 }
 
-function ScriptRuns({ scriptId, onOpenRun }) {
-  const [runs, setRuns] = useState([])
+function ExampleGallery({ onCreate, onCancel }: { onCreate: (name: string, src: string) => void; onCancel: () => void }) {
+  const [examples, setExamples] = useState<Example[]>([])
+  useEffect(() => { api.examples().then(setExamples) }, [])
+  const pick = (title: string, source: string) => {
+    const name = prompt('Script name?', title)
+    if (name) onCreate(name, source)
+  }
+  return (
+    <div className="card">
+      <div className="row spread"><h2>Start from an example</h2><button onClick={onCancel}>cancel</button></div>
+      <div className="muted" style={{ marginBottom: 10 }}>Pick a template, or start blank. Capabilities listed need a matching grant under Settings.</div>
+      <div className="example-grid">
+        <div className="example" onClick={() => pick('blank', 'def main(input):\n    return {}\n')}>
+          <strong>Blank</strong>
+          <div className="muted" style={{ fontSize: 12 }}>An empty main(input).</div>
+        </div>
+        {examples.map((ex) => (
+          <div key={ex.id} className="example" onClick={() => pick(ex.title, ex.source)}>
+            <strong>{ex.title}</strong>
+            <div className="muted" style={{ fontSize: 12 }}>{ex.description}</div>
+            {ex.capabilities.length > 0 && (
+              <div style={{ marginTop: 6 }}>{ex.capabilities.map((c) => <span key={c} className="badge suspended mono" style={{ marginRight: 4 }}>{c}</span>)}</div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ScriptRuns({ scriptId, onOpenRun }: { scriptId: string; onOpenRun: (id: string) => void }) {
+  const [runs, setRuns] = useState<Execution[]>([])
   const [limit, setLimit] = useState(20)
   useEffect(() => { api.listExecutions(scriptId, limit, 0).then((r) => setRuns(r || [])) }, [scriptId, limit])
   return (
     <div className="card">
       <h3>Runs for this script</h3>
       <table>
-        <thead><tr><th>id</th><th>status</th><th>trigger</th><th>actor</th><th>when</th></tr></thead>
+        <thead><tr><th>id</th><th>status</th><th>trigger</th><th>workspace</th><th>when</th></tr></thead>
         <tbody>
           {runs.map((e) => (
             <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => onOpenRun(e.id)}>
               <td className="mono">{e.id.slice(3, 11)}</td>
-              <td><span className={'badge ' + STATUS[e.status]}>{STATUS[e.status]}</span></td>
+              <td><StatusBadge status={e.status} /></td>
               <td className="muted">{e.trigger}</td>
-              <td className="mono muted">{e.actor_id}</td>
+              <td className="mono muted">{e.workspace}</td>
               <td className="muted">{new Date(e.created_at / 1e6).toLocaleString()}</td>
             </tr>
           ))}
@@ -224,8 +241,8 @@ function ScriptRuns({ scriptId, onOpenRun }) {
   )
 }
 
-function ScriptTriggers({ scriptId }) {
-  const [triggers, setTriggers] = useState([])
+function ScriptTriggers({ scriptId }: { scriptId: string }) {
+  const [triggers, setTriggers] = useState<Trigger[]>([])
   const [kind, setKind] = useState('cron')
   const [spec, setSpec] = useState('0 * * * *')
   const [actor, setActor] = useState('')
@@ -236,8 +253,8 @@ function ScriptTriggers({ scriptId }) {
     await api.putTrigger({ script_id: scriptId, kind, spec: kind === 'cron' ? spec : '', actor_template: actor })
     refresh()
   }
-  const del = async (id) => { await api.deleteTrigger(id); refresh() }
-  const hookURL = (token) => `${location.origin}/api/hooks/${token}`
+  const del = async (id: string) => { await api.deleteTrigger(id); refresh() }
+  const hookURL = (token: string) => `${location.origin}/api/hooks/${token}`
 
   return (
     <div className="card">
@@ -253,14 +270,14 @@ function ScriptTriggers({ scriptId }) {
           </select>
         )}
         {kind === 'cron' && <input value={spec} onChange={(e) => setSpec(e.target.value)} placeholder="cron expr" style={{ width: 130 }} />}
-        <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder="actor template (optional)" style={{ width: 200 }} />
+        <input value={actor} onChange={(e) => setActor(e.target.value)} placeholder="workspace template (optional)" style={{ width: 220 }} />
         <button onClick={add}>Add</button>
       </div>
       <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
-        actor template binds runs to a named actor for shared state, e.g. <span className="mono">webhook-{'{{event.id}}'}</span>. Empty = anonymous.
+        workspace template binds runs to a named workspace for shared state, e.g. <span className="mono">webhook-{'{{event.id}}'}</span>. Empty = anonymous.
       </div>
       <table>
-        <thead><tr><th>kind</th><th>spec / url</th><th>actor</th><th></th></tr></thead>
+        <thead><tr><th>kind</th><th>spec / url</th><th>workspace</th><th /></tr></thead>
         <tbody>
           {triggers.map((t) => (
             <tr key={t.id}>
@@ -279,14 +296,14 @@ function ScriptTriggers({ scriptId }) {
   )
 }
 
-function ScriptSecrets({ scriptId }) {
-  const [names, setNames] = useState([])
+function ScriptSecrets({ scriptId }: { scriptId: string }) {
+  const [names, setNames] = useState<string[]>([])
   const [name, setName] = useState('')
   const [value, setValue] = useState('')
   const refresh = useCallback(() => { api.listSecrets(scriptId).then((r) => setNames(r.names || [])) }, [scriptId])
   useEffect(() => { refresh() }, [refresh])
   const add = async () => { if (!name) return; await api.putSecret(name, value, scriptId); setName(''); setValue(''); refresh() }
-  const del = async (n) => { await api.deleteSecret(n, scriptId); refresh() }
+  const del = async (n: string) => { await api.deleteSecret(n, scriptId); refresh() }
   return (
     <div className="card">
       <h3>Per-script secrets</h3>
@@ -304,8 +321,4 @@ function ScriptSecrets({ scriptId }) {
       </div>
     </div>
   )
-}
-
-function pretty(raw) {
-  try { return JSON.stringify(JSON.parse(raw), null, 2) } catch { return String(raw) }
 }

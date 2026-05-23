@@ -23,10 +23,10 @@ import (
 
 // Builtin is one script-callable function in the stdlib catalog.
 type Builtin struct {
-	Name  string
-	Group string // category, for docs/inspection
-	Doc   string // one-line signature + description
-	Fn    func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error)
+	Name  string                                                                                              `json:"name"`
+	Group string                                                                                              `json:"group"` // category, for docs/inspection
+	Doc   string                                                                                              `json:"doc"`   // one-line signature + description
+	Fn    func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error) `json:"-"`
 }
 
 // catalog is the single source of truth for the stdlib, assembled from the

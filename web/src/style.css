@@ -81,3 +81,18 @@ h2 { font-size: 16px; margin: 0 0 12px; }
 h3 { font-size: 14px; margin: 0 0 8px; }
 .err { color: var(--red); }
 .toast { position: fixed; bottom: 16px; right: 16px; background: var(--panel2); border: 1px solid var(--border); padding: 10px 14px; border-radius: 8px; }
+
+/* example gallery */
+.example-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.example { border: 1px solid var(--border); border-radius: 8px; padding: 12px; cursor: pointer; background: var(--panel2); }
+.example:hover { border-color: var(--accent); }
+
+/* trace timeline */
+.timeline { display: flex; flex-direction: column; gap: 4px; }
+.tl-row { display: grid; grid-template-columns: 220px 1fr 70px; align-items: center; gap: 8px; }
+.tl-label { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tl-track { position: relative; height: 16px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
+.tl-bar { position: absolute; top: 1px; bottom: 1px; min-width: 3px; background: var(--accent); border-radius: 3px; opacity: .85; }
+.tl-bar.err { background: var(--red); }
+.tl-bar.barrier { background: var(--yellow); }
+.tl-dur { font-size: 11px; text-align: right; }

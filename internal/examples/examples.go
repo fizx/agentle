@@ -15,9 +15,9 @@ type Example struct {
 // All is the ordered example catalog.
 var All = []Example{
 	{
-		ID:          "hello",
-		Title:       "Hello agent",
-		Description: "Greets a name via the LLM and counts visits in per-workspace storage.",
+		ID:           "hello",
+		Title:        "Hello agent",
+		Description:  "Greets a name via the LLM and counts visits in per-workspace storage.",
 		Capabilities: []string{"llm"},
 		Source: `# main(input) receives the event envelope {id, kind, workspace, data}.
 def main(input):
@@ -30,9 +30,9 @@ def main(input):
 `,
 	},
 	{
-		ID:          "shell",
-		Title:       "Shell sandbox",
-		Description: "Runs commands in the per-workspace sandbox; each fs mutation is snapshotted.",
+		ID:           "shell",
+		Title:        "Shell sandbox",
+		Description:  "Runs commands in the per-workspace sandbox; each fs mutation is snapshotted.",
 		Capabilities: []string{"shell"},
 		Source: `# The shell runs in a per-workspace sandbox home dir (see the trace barriers).
 def main(input):
@@ -43,9 +43,9 @@ def main(input):
 `,
 	},
 	{
-		ID:          "parallel_map",
-		Title:       "Parallel map (fan-out LLM)",
-		Description: "Fans out concurrent LLM calls with bounded concurrency; replay-safe.",
+		ID:           "parallel_map",
+		Title:        "Parallel map (fan-out LLM)",
+		Description:  "Fans out concurrent LLM calls with bounded concurrency; replay-safe.",
 		Capabilities: []string{"llm"},
 		Source: `def summarize(topic):
     return llm([{"role": "user", "content": "One sentence about " + topic}])["content"]
@@ -56,9 +56,9 @@ def main(input):
 `,
 	},
 	{
-		ID:          "http",
-		Title:       "HTTP fetch",
-		Description: "Calls an allowlisted HTTP endpoint (grant an http config allowing api.github.com).",
+		ID:           "http",
+		Title:        "HTTP fetch",
+		Description:  "Calls an allowlisted HTTP endpoint (grant an http config allowing api.github.com).",
 		Capabilities: []string{"http"},
 		Source: `def main(input):
     repo = (input.get("data") or {}).get("repo", "golang/go")
@@ -67,9 +67,9 @@ def main(input):
 `,
 	},
 	{
-		ID:          "message_passing",
-		Title:       "Message passing",
-		Description: "Sends a message to another workspace and awaits a reply (send/recv).",
+		ID:           "message_passing",
+		Title:        "Message passing",
+		Description:  "Sends a message to another workspace and awaits a reply (send/recv).",
 		Capabilities: []string{},
 		Source: `# Run one execution with data {"role":"ping","to":"<other workspace>"} and
 # another (workspace = that 'to' value via a trigger actor template) as the pong.
@@ -85,9 +85,9 @@ def main(input):
 `,
 	},
 	{
-		ID:          "agent_loop",
-		Title:       "Yield-driven agent loop",
-		Description: "An inner LLM agent loop: recv() yields the next inbox message mid-flow.",
+		ID:           "agent_loop",
+		Title:        "Yield-driven agent loop",
+		Description:  "An inner LLM agent loop: recv() yields the next inbox message mid-flow.",
 		Capabilities: []string{"llm"},
 		Source: `# Bind a trigger with an actor template (e.g. agent-{{event.id}}) so messages
 # for the same id reach this running agent. recv() is the blocking yield point.

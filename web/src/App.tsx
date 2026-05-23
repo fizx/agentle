@@ -1,30 +1,32 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import Scripts from './views/Scripts.jsx'
-import Runs from './views/Runs.jsx'
-import Settings from './views/Settings.jsx'
-import Users from './views/Users.jsx'
-import { api, setUserId } from './api.js'
+import { useCallback, useEffect, useState } from 'react'
+import Scripts from './views/Scripts'
+import Runs from './views/Runs'
+import Settings from './views/Settings'
+import Users from './views/Users'
+import { api, setUserId } from './api'
+import type { User } from './types'
+
+type Tab = 'scripts' | 'runs' | 'settings' | 'users'
 
 export default function App() {
-  const [tab, setTab] = useState('scripts')
-  const [focusExec, setFocusExec] = useState(null)
-  const [me, setMe] = useState(null)
-  const [users, setUsers] = useState([])
+  const [tab, setTab] = useState<Tab>('scripts')
+  const [focusExec, setFocusExec] = useState<string | null>(null)
+  const [me, setMe] = useState<User | null>(null)
+  const [users, setUsers] = useState<User[]>([])
 
   const loadIdentity = useCallback(async () => {
     try {
       setMe(await api.me())
-      setUsers(await api.listUsers() || [])
+      setUsers((await api.listUsers()) || [])
     } catch { /* server may be starting */ }
   }, [])
   useEffect(() => { loadIdentity() }, [loadIdentity])
 
-  const openRun = (execId) => { setFocusExec(execId); setTab('runs') }
-  const switchUser = (id) => { setUserId(id); window.location.reload() }
+  const openRun = (execId: string) => { setFocusExec(execId); setTab('runs') }
+  const switchUser = (id: string) => { setUserId(id); window.location.reload() }
 
-  const isAdmin = me && me.role === 'admin'
-  const tabs = ['scripts', 'runs', 'settings']
-  if (isAdmin) tabs.push('users')
+  const isAdmin = me?.role === 'admin'
+  const tabs: Tab[] = isAdmin ? ['scripts', 'runs', 'settings', 'users'] : ['scripts', 'runs', 'settings']
 
   return (
     <>
@@ -39,16 +41,16 @@ export default function App() {
         </div>
         <div className="row" style={{ marginLeft: 'auto', gap: 8 }}>
           <span className="muted" style={{ fontSize: 12 }}>acting as</span>
-          <select value={me ? me.id : ''} onChange={(e) => switchUser(e.target.value)}>
+          <select value={me?.id ?? ''} onChange={(e) => switchUser(e.target.value)}>
             {me && !users.find((u) => u.id === me.id) && <option value={me.id}>{me.name} ({me.role})</option>}
             {users.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
           </select>
         </div>
       </div>
-      {tab === 'scripts' && <Scripts onOpenRun={openRun} me={me} />}
+      {tab === 'scripts' && <Scripts onOpenRun={openRun} />}
       {tab === 'runs' && <Runs focusExec={focusExec} clearFocus={() => setFocusExec(null)} />}
       {tab === 'settings' && <Settings />}
-      {tab === 'users' && <Users onChange={loadIdentity} />}
+      {tab === 'users' && <Users onChange={loadIdentity} me={me} />}
     </>
   )
 }
