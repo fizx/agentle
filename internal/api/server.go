@@ -17,9 +17,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
+	"github.com/kylemaxwell/agentle/internal/examples"
 	"github.com/kylemaxwell/agentle/internal/platform"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/kylemaxwell/agentle/internal/trigger"
+	"github.com/kylemaxwell/agentle/internal/vm"
 )
 
 // Server hosts the control-plane API and dashboard.
@@ -47,6 +49,8 @@ func (s *Server) Handler() http.Handler {
 		r.Use(s.identity)
 
 		r.Get("/me", s.me)
+		r.Get("/capabilities", s.listCapabilities)
+		r.Get("/examples", s.listExamples)
 		r.Get("/users", s.listUsers)
 		r.Put("/users", s.putUser)
 		r.Delete("/users/{id}", s.deleteUser)
@@ -88,6 +92,16 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, currentUser(r.Context()))
+}
+
+// listCapabilities returns the stdlib catalog (drives editor autocomplete + docs).
+func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, vm.Catalog())
+}
+
+// listExamples returns the starter-script gallery.
+func (s *Server) listExamples(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, examples.All)
 }
 
 func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +446,15 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 // --- triggers --------------------------------------------------------------
 
 func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request) {
-	triggers, err := s.svc.Store.ListTriggers(r.Context(), r.URL.Query().Get("kind"), r.URL.Query().Get("script"))
+	script := r.URL.Query().Get("script")
+	if script != "" {
+		if !s.canEditScript(w, r, script) {
+			return
+		}
+	} else if !s.requireAdmin(w, r) {
+		return
+	}
+	triggers, err := s.svc.Store.ListTriggers(r.Context(), r.URL.Query().Get("kind"), script)
 	writeOrErr(w, triggers, err)
 }
 
@@ -445,8 +467,11 @@ func (s *Server) putTrigger(w http.ResponseWriter, r *http.Request) {
 		t.ID = "tr_" + uuid.NewString()
 		t.Enabled = true // new triggers are enabled by default
 	}
-	if t.ScriptID == "" || (t.Kind != "cron" && t.Kind != "webhook") {
-		httpError(w, http.StatusBadRequest, "script_id and kind (cron|webhook) required")
+	if t.ScriptID == "" || !trigger.Creatable(t.Kind) {
+		httpError(w, http.StatusBadRequest, "script_id and a creatable kind (cron|webhook) required")
+		return
+	}
+	if !s.canEditScript(w, r, t.ScriptID) {
 		return
 	}
 	if t.Kind == "webhook" && t.Spec == "" {

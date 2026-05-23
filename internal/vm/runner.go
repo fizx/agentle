@@ -42,7 +42,7 @@ func (r *Runner) Run(ctx context.Context, m engine.Mediator, source string, inpu
 		Recursion:       false,
 	}
 
-	globals, err := starlark.ExecFileOptions(opts, thread, "main.star", source, builtins())
+	globals, err := starlark.ExecFileOptions(opts, thread, "main.star", source, predeclared())
 	if err != nil {
 		return nil, scriptError(err)
 	}

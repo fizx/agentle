@@ -4,12 +4,81 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"sync"
+	"sort"
 
 	"github.com/kylemaxwell/agentle/internal/engine"
 	"go.starlark.net/starlark"
 )
+
+// ---------------------------------------------------------------------------
+// Stdlib catalog
+//
+// Every builtin a script can call is registered here, grouped by category. Each
+// group lives in its own std_*.go file, so the surface area is easy to inspect
+// and to extend: to add a builtin, write its function in the matching std_*.go
+// (or a new one) and add a Builtin entry to that file's group slice. Nothing
+// else needs to change — predeclared(), Names() (autocomplete) and the
+// /api/capabilities endpoint all derive from this catalog.
+// ---------------------------------------------------------------------------
+
+// Builtin is one script-callable function in the stdlib catalog.
+type Builtin struct {
+	Name  string
+	Group string // category, for docs/inspection
+	Doc   string // one-line signature + description
+	Fn    func(*starlark.Thread, *starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error)
+}
+
+// catalog is the single source of truth for the stdlib, assembled from the
+// per-category group slices defined in the std_*.go files.
+func catalog() []Builtin {
+	var all []Builtin
+	all = append(all, groupSystem...)
+	all = append(all, groupKV...)
+	all = append(all, groupNet...)
+	all = append(all, groupActor...)
+	all = append(all, groupConcurrency...)
+	all = append(all, groupShell...)
+	return all
+}
+
+// predeclared builds the Starlark global environment from the catalog.
+func predeclared() starlark.StringDict {
+	d := make(starlark.StringDict, len(catalog()))
+	for _, b := range catalog() {
+		b := b
+		d[b.Name] = starlark.NewBuiltin(b.Name, b.Fn)
+	}
+	return d
+}
+
+// Names returns the builtin names, sorted (used by the dashboard for autocomplete).
+func Names() []string {
+	c := catalog()
+	out := make([]string, 0, len(c))
+	for _, b := range c {
+		out = append(out, b.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Catalog returns the documented stdlib surface (name/group/doc), sorted by group
+// then name. Served by the control plane so the UI can show capability docs.
+func Catalog() []Builtin {
+	c := catalog()
+	sort.SliceStable(c, func(i, j int) bool {
+		if c[i].Group != c[j].Group {
+			return c[i].Group < c[j].Group
+		}
+		return c[i].Name < c[j].Name
+	})
+	return c
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers used by every category
+// ---------------------------------------------------------------------------
 
 // thread-local keys.
 const (
@@ -29,7 +98,8 @@ func ctxOf(t *starlark.Thread) context.Context {
 }
 
 // callCap performs a memoized capability RPC and converts the result back into a
-// Starlark value. args must be JSON-marshalable.
+// Starlark value. args must be JSON-marshalable. This is the one bridge from a
+// builtin to the durable engine; every capability call goes through it.
 func callCap(t *starlark.Thread, capability, method string, args any, idempotent, mutatesFS bool) (starlark.Value, error) {
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -46,262 +116,6 @@ func callCap(t *starlark.Thread, capability, method string, args any, idempotent
 		return nil, err
 	}
 	return unmarshalResult(res)
-}
-
-// builtins returns the predeclared global environment shared by every script.
-func builtins() starlark.StringDict {
-	b := starlark.StringDict{
-		"log":          starlark.NewBuiltin("log", bLog),
-		"now":          starlark.NewBuiltin("now", bNow),
-		"sleep":        starlark.NewBuiltin("sleep", bSleep),
-		"rand":         starlark.NewBuiltin("rand", bRand),
-		"rand_int":     starlark.NewBuiltin("rand_int", bRandInt),
-		"http_get":     starlark.NewBuiltin("http_get", bHTTPGet),
-		"http_post":    starlark.NewBuiltin("http_post", bHTTPPost),
-		"llm":          starlark.NewBuiltin("llm", bLLM),
-		// Preferred KV API. `load` would read better than `fetch`, but Starlark
-		// reserves `load` as a keyword (the module-load statement), so it can't
-		// be an identifier anywhere. `store`/`fetch`/`keys` are the legal pair.
-		"store":        starlark.NewBuiltin("store", bKVSet),  // store(key, value)
-		"fetch":        starlark.NewBuiltin("fetch", bKVGet),  // fetch(key) -> value
-		"keys":         starlark.NewBuiltin("keys", bKVList),  // keys(prefix) -> [key]
-		"kv_get":       starlark.NewBuiltin("kv_get", bKVGet), // deprecated alias of fetch
-		"kv_set":       starlark.NewBuiltin("kv_set", bKVSet), // deprecated alias of store
-		"kv_list":      starlark.NewBuiltin("kv_list", bKVList),
-		"shell":        starlark.NewBuiltin("shell", bShell),
-		"parallel_map": starlark.NewBuiltin("parallel_map", bParallelMap),
-		// Actor messaging. recv() is the blocking "yield" point that pops the
-		// next inbox message mid-flow (`yield` itself is a reserved Starlark word).
-		"send": starlark.NewBuiltin("send", bSend),
-		"recv": starlark.NewBuiltin("recv", bRecv),
-	}
-	return b
-}
-
-func bLog(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-	parts := make([]string, 0, len(args))
-	for _, a := range args {
-		if s, ok := starlark.AsString(a); ok {
-			parts = append(parts, s)
-		} else {
-			parts = append(parts, a.String())
-		}
-	}
-	if _, err := callCap(t, "log", "print", map[string]any{"message": strings.Join(parts, " ")}, true, false); err != nil {
-		return nil, err
-	}
-	return starlark.None, nil
-}
-
-func bNow(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackArgs("now", args, nil); err != nil {
-		return nil, err
-	}
-	return callCap(t, "time", "now", map[string]any{}, true, false)
-}
-
-func bSleep(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var seconds starlark.Value
-	if err := starlark.UnpackArgs("sleep", args, kwargs, "seconds", &seconds); err != nil {
-		return nil, err
-	}
-	secs, ok := starlark.AsFloat(seconds)
-	if !ok {
-		return nil, fmt.Errorf("sleep: seconds must be a number")
-	}
-	return callCap(t, "time", "sleep", map[string]any{"seconds": secs}, true, false)
-}
-
-func bRand(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackArgs("rand", args, nil); err != nil {
-		return nil, err
-	}
-	return callCap(t, "rand", "float", map[string]any{}, true, false)
-}
-
-func bRandInt(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var n int
-	if err := starlark.UnpackArgs("rand_int", args, kwargs, "n", &n); err != nil {
-		return nil, err
-	}
-	return callCap(t, "rand", "int", map[string]any{"n": n}, true, false)
-}
-
-func bHTTPGet(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var url string
-	var headers *starlark.Dict
-	if err := starlark.UnpackArgs("http_get", args, kwargs, "url", &url, "headers?", &headers); err != nil {
-		return nil, err
-	}
-	h, err := dictToStringMap(headers)
-	if err != nil {
-		return nil, err
-	}
-	return callCap(t, "http", "get", map[string]any{"url": url, "headers": h}, true, false)
-}
-
-func bHTTPPost(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var url, body string
-	var headers *starlark.Dict
-	if err := starlark.UnpackArgs("http_post", args, kwargs, "url", &url, "body?", &body, "headers?", &headers); err != nil {
-		return nil, err
-	}
-	h, err := dictToStringMap(headers)
-	if err != nil {
-		return nil, err
-	}
-	return callCap(t, "http", "post", map[string]any{"url": url, "body": body, "headers": h}, false, false)
-}
-
-func bLLM(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var messages starlark.Value
-	var model string
-	var temperature float64
-	if err := starlark.UnpackArgs("llm", args, kwargs, "messages", &messages, "model?", &model, "temperature?", &temperature); err != nil {
-		return nil, err
-	}
-	msgs, err := starlarkToGo(messages)
-	if err != nil {
-		return nil, err
-	}
-	return callCap(t, "llm", "chat", map[string]any{"messages": msgs, "model": model, "temperature": temperature}, true, false)
-}
-
-func bKVGet(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var key string
-	if err := starlark.UnpackArgs("kv_get", args, kwargs, "key", &key); err != nil {
-		return nil, err
-	}
-	return callCap(t, "kv", "get", map[string]any{"key": key}, true, false)
-}
-
-func bKVSet(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var key string
-	var value starlark.Value
-	if err := starlark.UnpackArgs("kv_set", args, kwargs, "key", &key, "value", &value); err != nil {
-		return nil, err
-	}
-	gv, err := starlarkToGo(value)
-	if err != nil {
-		return nil, err
-	}
-	return callCap(t, "kv", "set", map[string]any{"key": key, "value": gv}, false, false)
-}
-
-func bKVList(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var prefix string
-	if err := starlark.UnpackArgs("kv_list", args, kwargs, "prefix?", &prefix); err != nil {
-		return nil, err
-	}
-	return callCap(t, "kv", "list", map[string]any{"prefix": prefix}, true, false)
-}
-
-func bShell(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var argv *starlark.List
-	var dir string
-	var env *starlark.Dict
-	if err := starlark.UnpackArgs("shell", args, kwargs, "argv", &argv, "dir?", &dir, "env?", &env); err != nil {
-		return nil, err
-	}
-	gv, err := starlarkToGo(argv)
-	if err != nil {
-		return nil, err
-	}
-	e, err := dictToStringMap(env)
-	if err != nil {
-		return nil, err
-	}
-	return callCap(t, "shell", "exec", map[string]any{"argv": gv, "dir": dir, "env": e}, false, true)
-}
-
-// bParallelMap applies fn to each item concurrently, each in its own deterministic
-// call-key subtree, and returns the results in input order.
-func bParallelMap(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var fn starlark.Callable
-	var items starlark.Iterable
-	maxConc := 4
-	if err := starlark.UnpackArgs("parallel_map", args, kwargs, "fn", &fn, "items", &items, "max_concurrency?", &maxConc); err != nil {
-		return nil, err
-	}
-	if maxConc < 1 {
-		maxConc = 1
-	}
-
-	var elems []starlark.Value
-	iter := items.Iterate()
-	var e starlark.Value
-	for iter.Next(&e) {
-		elems = append(elems, e)
-	}
-	iter.Done()
-
-	parent := mediatorOf(t)
-	ctx := ctxOf(t)
-	fan := parent.Child() // the parallel_map node; children hang off it deterministically
-	children := make([]engine.Mediator, len(elems))
-	for i := range elems {
-		children[i] = fan.Child()
-	}
-
-	fn.Freeze()
-	results := make([]starlark.Value, len(elems))
-	errs := make([]error, len(elems))
-	sem := make(chan struct{}, maxConc)
-	var wg sync.WaitGroup
-	for i := range elems {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			item := elems[i]
-			item.Freeze()
-			ct := &starlark.Thread{Name: fmt.Sprintf("%s#%d", t.Name, i)}
-			ct.SetLocal(tlMediator, children[i])
-			ct.SetLocal(tlCtx, ctx)
-			r, err := starlark.Call(ct, fn, starlark.Tuple{item}, nil)
-			results[i], errs[i] = r, err
-		}(i)
-	}
-	wg.Wait()
-
-	for i, err := range errs {
-		if err != nil {
-			return nil, fmt.Errorf("parallel_map item %d: %w", i, err)
-		}
-	}
-	return starlark.NewList(results), nil
-}
-
-func bSend(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var workspace string
-	var data starlark.Value
-	if err := starlark.UnpackArgs("send", args, kwargs, "workspace", &workspace, "data", &data); err != nil {
-		return nil, err
-	}
-	gv, err := starlarkToGo(data)
-	if err != nil {
-		return nil, err
-	}
-	return callCap(t, "inbox", "send", map[string]any{"workspace": workspace, "data": gv}, false, false)
-}
-
-func bRecv(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var timeout starlark.Value
-	if err := starlark.UnpackArgs("recv", args, kwargs, "timeout?", &timeout); err != nil {
-		return nil, err
-	}
-	secs := 0.0
-	if timeout != nil {
-		f, ok := starlark.AsFloat(timeout)
-		if !ok {
-			return nil, fmt.Errorf("recv: timeout must be a number")
-		}
-		secs = f
-	}
-	// Non-idempotent: consuming a message is a side effect, made crash-safe by the
-	// call's IdemKey. Returns the message data, or None on timeout.
-	return callCap(t, "inbox", "recv", map[string]any{"timeout_seconds": secs}, false, false)
 }
 
 func dictToStringMap(d *starlark.Dict) (map[string]string, error) {

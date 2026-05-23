@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/kylemaxwell/agentle/internal/examples"
 	"github.com/kylemaxwell/agentle/internal/store"
 )
 
@@ -64,7 +65,7 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if _, err := st.SaveVersion(ctx, hello.ID, sampleSource, "", []store.GrantRef{{Capability: "llm", ConfigID: llmGrant}}); err != nil {
+	if _, err := st.SaveVersion(ctx, hello.ID, examples.Find("hello").Source, "", []store.GrantRef{{Capability: "llm", ConfigID: llmGrant}}); err != nil {
 		return err
 	}
 
@@ -72,7 +73,7 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if _, err := st.SaveVersion(ctx, sheller.ID, shellSource, "", []store.GrantRef{{Capability: "shell", ConfigID: "shell-local"}}); err != nil {
+	if _, err := st.SaveVersion(ctx, sheller.ID, examples.Find("shell").Source, "", []store.GrantRef{{Capability: "shell", ConfigID: "shell-local"}}); err != nil {
 		return err
 	}
 	log.Info("seeded sample scripts", "llm", llmGrant)
@@ -85,43 +86,3 @@ func envOr(k, def string) string {
 	}
 	return def
 }
-
-const sampleSource = `# A tiny durable agent. Every llm/store/log call is a memoized RPC: re-running
-# this execution replays from the event log instead of re-spending the calls.
-#
-# main(input) receives a structured event: {id, kind, trigger_id, actor, data}.
-# "data" is what the caller provided (run input, or a webhook body).
-def main(input):
-    data = input.get("data") or {}
-    name = data.get("name", "world")
-    log("greeting", name, "via", input["kind"])
-
-    # Per-actor durable state. Manual runs are anonymous actors (no sharing);
-    # a trigger can bind a named actor to share state across events.
-    seen = fetch("seen:" + name) or 0
-    store("seen:" + name, seen + 1)
-
-    reply = llm([
-        {"role": "system", "content": "You are a cheerful greeter."},
-        {"role": "user", "content": "Greet " + name + " warmly in one sentence."},
-    ])
-
-    return {"greeting": reply["content"], "times_seen": seen + 1}
-`
-
-const shellSource = `# Shell capability: commands run in a per-actor sandbox home dir that is
-# snapshotted to object storage on each fs mutation (see the trace barriers).
-def main(input):
-    data = input.get("data") or {}
-    msg = data.get("message", "hello from the sandbox")
-
-    shell(["sh", "-c", "echo '" + msg + "' > note.txt"])
-    cat = shell(["cat", "note.txt"])
-    uname = shell(["uname", "-a"])
-
-    return {
-        "exit": cat["code"],
-        "note": cat["stdout"].strip(),
-        "uname": uname["stdout"].strip(),
-    }
-`
