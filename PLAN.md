@@ -45,9 +45,14 @@ These resolve the load-bearing architectural questions behind the vision above. 
 - Replay verifies each call's (capability, method, args-hash) against the recorded event; a mismatch is a nondeterminism / version-drift error and fails loudly.
 
 ## Filesystem ↔ log consistency (crash safety)
-- The actor home dir (object storage) and the event log must not drift. **fs-mutating RPCs force an fs snapshot barrier on commit**; the log records the snapshot key + seq.
-- Recovery: restore fs from the latest barrier snapshot, replay the log from that seq forward. Post-barrier RPCs re-execute, so they must be idempotent or themselves barriered.
-- Home dir is overlay/CoW so snapshots are cheap enough to take per fs-mutating RPC.
+- The actor home dir (object storage) and the event log must not drift. fs-mutating RPCs mark the home dir dirty; the log records each snapshot's key + seq as a barrier.
+- **Snapshot cadence is debounced** (default 60s) plus a forced snapshot on teardown (graceful suspension/eviction), rather than one snapshot per fs-mutating RPC — far fewer object-storage writes for chatty fs workloads, at the cost of coarser recovery granularity. (Set the debounce to 0 for strict per-RPC barriers.)
+- Recovery: restore fs from the latest barrier snapshot, replay the log from that seq forward. Post-barrier RPCs re-execute, so they must be idempotent or themselves barriered. With debouncing, "post-barrier" can span up to one window of fs-mutating RPCs.
+- Home dir is overlay/CoW so snapshots stay cheap.
+
+## Durable suspension (actors)
+- `recv()` on an empty inbox is a **durable suspension point**, not a blocking wait: the execution parks (StatusSuspended) and is resumed by deterministic replay when a message arrives at its workspace or a `recv(timeout=)` deadline fires. This makes long-lived agent loops free while idle.
+- A capability signals it by returning a typed suspend error; the Mediator records nothing for the call (so it re-executes on resume). Timer deadlines are anchored on a memoized `now()` to stay stable across resumes. A resumer/dispatcher drives wakeups (in-process here; the event/timer tiers in prod).
 
 ## Sandboxes
 - Pluggable sandbox framework, one `Sandbox`/`SandboxPool` interface across all tiers. The sandbox template is an **OCI image** (`Version.Image`), so the *same artifact* runs in dev and prod — no behavior divergence.
