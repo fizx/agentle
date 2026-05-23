@@ -281,6 +281,15 @@ CREATE TABLE IF NOT EXISTS suspensions (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_susp_ws ON suspensions(workspace);
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id TEXT PRIMARY KEY,
+  hash TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL DEFAULT '',
+  user_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_token_user ON api_tokens(user_id);
 `
 
 func now() int64 { return time.Now().UnixNano() }

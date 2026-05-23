@@ -80,7 +80,22 @@ func (s *Server) Handler() http.Handler {
 		r.Put("/triggers", s.putTrigger)
 		r.Delete("/triggers/{id}", s.deleteTrigger)
 
+		r.Get("/tokens", s.listTokens)
+		r.Post("/tokens", s.createToken)
+		r.Delete("/tokens/{id}", s.deleteToken)
+
 		r.Post("/hooks/{token}", s.webhook)
+	})
+
+	// Public programmatic REST API, authenticated by a Bearer API token (carries
+	// the token owner's RBAC). Distinct from the dashboard control plane above.
+	r.Route("/v1", func(r chi.Router) {
+		r.Use(s.bearerIdentity)
+		r.Get("/me", s.me)
+		r.Get("/scripts", s.listScripts)
+		r.Post("/scripts/{id}/runs", s.v1Run)
+		r.Get("/runs/{id}", s.v1GetRun)
+		r.Get("/runs/{id}/trace", s.v1GetTrace)
 	})
 
 	// A minimal demo MCP server (JSON-RPC over HTTP). Lets the platform dogfood the
