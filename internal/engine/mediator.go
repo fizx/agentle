@@ -121,6 +121,9 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 	m.st.mu.Unlock()
 
 	exec, ok := m.st.env[inv.Capability]
+	if !ok && inv.Capability == "shell" && m.st.sb != nil {
+		exec, ok = shellExecutor{m.st.sb}, true
+	}
 	if !ok {
 		return nil, &CallError{Capability: inv.Capability, Method: inv.Method, Msg: "capability not granted"}
 	}

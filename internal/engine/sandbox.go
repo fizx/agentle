@@ -68,3 +68,28 @@ func (f ExecutorFunc) Execute(ctx context.Context, inv Invocation) (json.RawMess
 // Environment is the set of capabilities granted to an execution, assembled from
 // the principal's grants. Secret-refs are already resolved into these executors.
 type Environment map[string]Executor // capability name -> bound executor
+
+// shellExecutor adapts a Sandbox to the "shell" capability. It is supplied by the
+// Mediator (which holds the per-execution Sandbox) rather than the Environment,
+// since the sandbox is provisioned after grants are resolved.
+type shellExecutor struct{ sb Sandbox }
+
+func (s shellExecutor) Execute(ctx context.Context, inv Invocation) (json.RawMessage, error) {
+	var a struct {
+		Argv []string          `json:"argv"`
+		Dir  string            `json:"dir"`
+		Env  map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(inv.Args, &a); err != nil {
+		return nil, err
+	}
+	res, err := s.sb.Exec(ctx, Command{Argv: a.Argv, Dir: a.Dir, Env: a.Env})
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]any{
+		"code":   res.Code,
+		"stdout": string(res.Stdout),
+		"stderr": string(res.Stderr),
+	})
+}
