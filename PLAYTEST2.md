@@ -2,3 +2,7 @@
 - add an MCP implementation and examples (both direct call and llm tool usage)
 - i think its ok to snapshot to object storage only on debounced 1 minute or sandbox teardown
 - please implement test coverage checks
+- i need a durable true suspend.
+- missing example usage of actor/workspace behavior around send/recv
+- is there a good timeline viewer lib we could be using?
+- when running the scripts from the script page, i'd like to see an execution id.
