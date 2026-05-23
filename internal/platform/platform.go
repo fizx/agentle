@@ -59,7 +59,7 @@ func (s *Service) Resolve(ctx context.Context, exec engine.ExecutionID) (engine.
 	if err != nil {
 		return engine.ExecutionSpec{}, err
 	}
-	env, err := s.assembleEnv(ctx, exec, e.ScriptID, v.Grants)
+	env, err := s.assembleEnv(ctx, exec, e.ScriptID, e.ActorID, v.Grants)
 	if err != nil {
 		return engine.ExecutionSpec{}, err
 	}
@@ -73,12 +73,15 @@ func (s *Service) SetStatus(ctx context.Context, exec engine.ExecutionID, status
 
 // assembleEnv builds the capability environment: system caps always, granted
 // caps from resolved tool configs + secrets.
-func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scriptID string, grants []store.GrantRef) (engine.Environment, error) {
+func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scriptID, actorID string, grants []store.GrantRef) (engine.Environment, error) {
+	if actorID == "" {
+		actorID = "exec:" + string(exec)
+	}
 	env := engine.Environment{
 		"log":  caps.Log(exec, s.LogSink),
 		"time": caps.Time(s.Cfg.MaxSleep),
 		"rand": caps.Rand(exec),
-		"kv":   caps.KV(s.KV, "script:"+scriptID), // per-actor namespace
+		"kv":   caps.KV(s.KV, actorID), // namespaced by actor, not script
 	}
 	for _, g := range grants {
 		cfg, err := s.Store.GetToolConfig(ctx, g.ConfigID)
@@ -87,7 +90,7 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 		}
 		var secret string
 		if cfg.SecretRef != "" {
-			secret, err = s.Store.GetSecret(ctx, cfg.SecretRef)
+			secret, err = s.Store.ResolveSecret(ctx, cfg.SecretRef, scriptID)
 			if err != nil {
 				return nil, fmt.Errorf("config %q secret %q: %w", cfg.ID, cfg.SecretRef, err)
 			}
@@ -146,28 +149,44 @@ func buildExecutor(capability string, cfg *store.ToolConfig, secret string) (eng
 	}
 }
 
-// RunExecution creates an execution row for (scriptID, version) and runs it to
-// completion synchronously, returning the final execution record.
-func (s *Service) RunExecution(ctx context.Context, scriptID string, version uint64, input json.RawMessage, trigger string) (*store.Execution, error) {
-	sc, err := s.Store.GetScript(ctx, scriptID)
+// RunRequest describes how to start an execution. The platform builds the
+// structured event envelope and resolves the actor before running.
+type RunRequest struct {
+	ScriptID      string          // required
+	Version       uint64          // 0 = current
+	Kind          string          // "dashboard" | "webhook" | "cron"
+	TriggerID     string          // empty for dashboard runs
+	ActorTemplate string          // optional mustache, e.g. "webhook-{{event.id}}"
+	EventID       string          // optional inbound event id (else generated)
+	Data          json.RawMessage // user input / parsed webhook body
+}
+
+// RunExecution builds the event envelope, resolves the actor (kv namespace),
+// creates the execution row, and runs it to completion synchronously.
+func (s *Service) RunExecution(ctx context.Context, req RunRequest) (*store.Execution, error) {
+	sc, err := s.Store.GetScript(ctx, req.ScriptID)
 	if err != nil {
 		return nil, err
 	}
+	version := req.Version
 	if version == 0 {
 		version = sc.CurrentVersion
 	}
 	if version == 0 {
-		return nil, fmt.Errorf("script %q has no versions", scriptID)
+		return nil, fmt.Errorf("script %q has no versions", req.ScriptID)
 	}
-	v, err := s.Store.GetVersion(ctx, scriptID, version)
+	v, err := s.Store.GetVersion(ctx, req.ScriptID, version)
 	if err != nil {
 		return nil, err
 	}
 
 	id := "ex_" + uuid.NewString()
+	envelope, actorID := buildEnvelope(id, req)
+	input, _ := json.Marshal(envelope)
+
 	exe := store.Execution{
-		ID: id, ScriptID: scriptID, Version: version,
-		Status: int(engine.StatusRunning), Input: input, Trigger: trigger,
+		ID: id, ScriptID: req.ScriptID, Version: version, ActorID: actorID,
+		Status: int(engine.StatusRunning), Input: input, Trigger: triggerLabel(req),
 	}
 	if err := s.Store.CreateExecution(ctx, exe); err != nil {
 		return nil, err
@@ -178,8 +197,7 @@ func (s *Service) RunExecution(ctx context.Context, scriptID string, version uin
 		eng.Pool = s.Pool
 	}
 	if _, err := eng.Run(ctx, engine.ExecutionID(id)); err != nil {
-		// Status already recorded as failed by the engine; surface the record.
-		return s.Store.GetExecution(ctx, id)
+		return s.Store.GetExecution(ctx, id) // status already recorded as failed
 	}
 	return s.Store.GetExecution(ctx, id)
 }

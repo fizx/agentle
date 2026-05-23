@@ -4,18 +4,18 @@ package trigger
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
 
+	"github.com/kylemaxwell/agentle/internal/platform"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/robfig/cron/v3"
 )
 
 // Runner is the subset of the platform service the scheduler needs.
 type Runner interface {
-	RunExecution(ctx context.Context, scriptID string, version uint64, input json.RawMessage, trigger string) (*store.Execution, error)
+	RunExecution(ctx context.Context, req platform.RunRequest) (*store.Execution, error)
 }
 
 // Scheduler runs cron triggers. Call Reload after the trigger set changes.
@@ -37,7 +37,7 @@ func NewScheduler(st *store.Store, runner Runner, log *slog.Logger) *Scheduler {
 
 // Reload rebuilds the cron schedule from the store's enabled cron triggers.
 func (s *Scheduler) Reload(ctx context.Context) error {
-	triggers, err := s.store.ListTriggers(ctx, "cron")
+	triggers, err := s.store.ListTriggers(ctx, "cron", "")
 	if err != nil {
 		return err
 	}
@@ -65,8 +65,12 @@ func (s *Scheduler) Reload(ctx context.Context) error {
 func (s *Scheduler) fire(t store.Trigger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	input, _ := json.Marshal(map[string]any{"trigger": "cron", "trigger_id": t.ID, "fired_at": time.Now().UnixNano()})
-	exe, err := s.runner.RunExecution(ctx, t.ScriptID, 0, input, "cron:"+t.ID)
+	exe, err := s.runner.RunExecution(ctx, platform.RunRequest{
+		ScriptID:      t.ScriptID,
+		Kind:          "cron",
+		TriggerID:     t.ID,
+		ActorTemplate: t.ActorTemplate,
+	})
 	if err != nil {
 		s.log.Error("cron trigger run failed", "trigger", t.ID, "script", t.ScriptID, "err", err)
 		return

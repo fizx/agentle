@@ -59,8 +59,14 @@ func builtins() starlark.StringDict {
 		"http_get":     starlark.NewBuiltin("http_get", bHTTPGet),
 		"http_post":    starlark.NewBuiltin("http_post", bHTTPPost),
 		"llm":          starlark.NewBuiltin("llm", bLLM),
-		"kv_get":       starlark.NewBuiltin("kv_get", bKVGet),
-		"kv_set":       starlark.NewBuiltin("kv_set", bKVSet),
+		// Preferred KV API. `load` would read better than `fetch`, but Starlark
+		// reserves `load` as a keyword (the module-load statement), so it can't
+		// be an identifier anywhere. `store`/`fetch`/`keys` are the legal pair.
+		"store":        starlark.NewBuiltin("store", bKVSet),  // store(key, value)
+		"fetch":        starlark.NewBuiltin("fetch", bKVGet),  // fetch(key) -> value
+		"keys":         starlark.NewBuiltin("keys", bKVList),  // keys(prefix) -> [key]
+		"kv_get":       starlark.NewBuiltin("kv_get", bKVGet), // deprecated alias of fetch
+		"kv_set":       starlark.NewBuiltin("kv_set", bKVSet), // deprecated alias of store
 		"kv_list":      starlark.NewBuiltin("kv_list", bKVList),
 		"shell":        starlark.NewBuiltin("shell", bShell),
 		"parallel_map": starlark.NewBuiltin("parallel_map", bParallelMap),

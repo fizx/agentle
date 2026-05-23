@@ -15,3 +15,4 @@
 - triggers should send structured json events with {...metadata, data} # i.e. data is the provided input.
 - pagination should exist on lists.
 - does the sandbox work?
+- no example of sending/message passing to a named actor/inbox

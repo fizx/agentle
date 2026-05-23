@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -43,11 +44,20 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.Timeout(6 * time.Minute))
 
 	r.Route("/api", func(r chi.Router) {
+		r.Use(s.identity)
+
+		r.Get("/me", s.me)
+		r.Get("/users", s.listUsers)
+		r.Put("/users", s.putUser)
+		r.Delete("/users/{id}", s.deleteUser)
+
 		r.Get("/scripts", s.listScripts)
 		r.Post("/scripts", s.createScript)
 		r.Get("/scripts/{id}", s.getScript)
+		r.Delete("/scripts/{id}", s.deleteScript)
 		r.Get("/scripts/{id}/versions", s.listVersions)
 		r.Post("/scripts/{id}/versions", s.saveVersion)
+		r.Post("/scripts/{id}/versions/{v}/restore", s.restoreVersion)
 		r.Post("/scripts/{id}/run", s.runScript)
 
 		r.Get("/executions", s.listExecutions)
@@ -59,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 
 		r.Get("/secrets", s.listSecrets)
 		r.Put("/secrets", s.putSecret)
+		r.Delete("/secrets/{name}", s.deleteSecret)
 
 		r.Get("/triggers", s.listTriggers)
 		r.Put("/triggers", s.putTrigger)
@@ -73,10 +84,56 @@ func (s *Server) Handler() http.Handler {
 	return r
 }
 
+// --- users -----------------------------------------------------------------
+
+func (s *Server) me(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, currentUser(r.Context()))
+}
+
+func (s *Server) listUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.svc.Store.ListUsers(r.Context())
+	writeOrErr(w, users, err)
+}
+
+func (s *Server) putUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		ID   string     `json:"id"`
+		Name string     `json:"name"`
+		Role store.Role `json:"role"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Name == "" {
+		httpError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if body.ID == "" {
+		body.ID = "u_" + uuid.NewString()
+	}
+	u, err := s.svc.Store.CreateUser(r.Context(), body.ID, body.Name, body.Role)
+	writeOrErr(w, u, err)
+}
+
+func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if err := s.svc.Store.DeleteUser(r.Context(), chi.URLParam(r, "id")); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- scripts ---------------------------------------------------------------
 
 func (s *Server) listScripts(w http.ResponseWriter, r *http.Request) {
-	scripts, err := s.svc.Store.ListScripts(r.Context())
+	limit, offset := pagination(r)
+	scripts, err := s.svc.Store.ListScripts(r.Context(), limit, offset)
 	writeOrErr(w, scripts, err)
 }
 
@@ -93,7 +150,7 @@ func (s *Server) createScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := "sc_" + uuid.NewString()
-	sc, err := s.svc.Store.CreateScript(r.Context(), id, body.Name)
+	sc, err := s.svc.Store.CreateScript(r.Context(), id, body.Name, currentUser(r.Context()).ID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -137,6 +194,10 @@ func (s *Server) listVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveVersion(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.canEditScript(w, r, id) {
+		return
+	}
 	var body struct {
 		Source string           `json:"source"`
 		Image  string           `json:"image"`
@@ -145,11 +206,47 @@ func (s *Server) saveVersion(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
-	v, err := s.svc.Store.SaveVersion(r.Context(), chi.URLParam(r, "id"), body.Source, body.Image, body.Grants)
+	v, err := s.svc.Store.SaveVersion(r.Context(), id, body.Source, body.Image, body.Grants)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "script not found")
 		return
 	}
+	writeOrErr(w, v, err)
+}
+
+func (s *Server) deleteScript(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.canEditScript(w, r, id) {
+		return
+	}
+	if err := s.svc.Store.DeleteScript(r.Context(), id); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// restoreVersion creates a new version from an older one's source + grants.
+func (s *Server) restoreVersion(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if !s.canEditScript(w, r, id) {
+		return
+	}
+	ver, err := strconv.ParseUint(chi.URLParam(r, "v"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad version")
+		return
+	}
+	old, err := s.svc.Store.GetVersion(r.Context(), id, ver)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "version not found")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	v, err := s.svc.Store.SaveVersion(r.Context(), id, old.Source, old.Image, old.Grants)
 	writeOrErr(w, v, err)
 }
 
@@ -164,7 +261,12 @@ func (s *Server) runScript(w http.ResponseWriter, r *http.Request) {
 	if len(body.Input) == 0 {
 		body.Input = json.RawMessage("null")
 	}
-	exe, err := s.svc.RunExecution(r.Context(), chi.URLParam(r, "id"), body.Version, body.Input, "manual")
+	exe, err := s.svc.RunExecution(r.Context(), platform.RunRequest{
+		ScriptID: chi.URLParam(r, "id"),
+		Version:  body.Version,
+		Kind:     "dashboard",
+		Data:     body.Input,
+	})
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "script not found")
 		return
@@ -175,7 +277,8 @@ func (s *Server) runScript(w http.ResponseWriter, r *http.Request) {
 // --- executions ------------------------------------------------------------
 
 func (s *Server) listExecutions(w http.ResponseWriter, r *http.Request) {
-	list, err := s.svc.Store.ListExecutions(r.Context(), r.URL.Query().Get("script"), 100)
+	limit, offset := pagination(r)
+	list, err := s.svc.Store.ListExecutions(r.Context(), r.URL.Query().Get("script"), limit, offset)
 	writeOrErr(w, list, err)
 }
 
@@ -216,12 +319,35 @@ func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"id": c.ID})
 }
 
+// scopeFromQuery maps ?script=<id> to a script secret scope, else global. A
+// script scope requires edit rights on that script.
+func (s *Server) scopeFromQuery(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if sid := r.URL.Query().Get("script"); sid != "" {
+		if !s.canEditScript(w, r, sid) {
+			return "", false
+		}
+		return store.ScriptScope(sid), true
+	}
+	if !s.requireAdmin(w, r) { // global secrets are admin-only
+		return "", false
+	}
+	return store.ScopeGlobal, true
+}
+
 func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
-	names, err := s.svc.Store.ListSecretNames(r.Context())
-	writeOrErr(w, map[string]any{"names": names}, err)
+	scope, ok := s.scopeFromQuery(w, r)
+	if !ok {
+		return
+	}
+	names, err := s.svc.Store.ListSecretNames(r.Context(), scope)
+	writeOrErr(w, map[string]any{"names": names, "scope": scope}, err)
 }
 
 func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFromQuery(w, r)
+	if !ok {
+		return
+	}
 	var body struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
@@ -233,17 +359,29 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "name required")
 		return
 	}
-	if err := s.svc.Store.PutSecret(r.Context(), body.Name, body.Value); err != nil {
+	if err := s.svc.Store.PutSecret(r.Context(), body.Name, scope, body.Value); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": body.Name})
 }
 
+func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFromQuery(w, r)
+	if !ok {
+		return
+	}
+	if err := s.svc.Store.DeleteSecret(r.Context(), chi.URLParam(r, "name"), scope); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- triggers --------------------------------------------------------------
 
 func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request) {
-	triggers, err := s.svc.Store.ListTriggers(r.Context(), r.URL.Query().Get("kind"))
+	triggers, err := s.svc.Store.ListTriggers(r.Context(), r.URL.Query().Get("kind"), r.URL.Query().Get("script"))
 	writeOrErr(w, triggers, err)
 }
 
@@ -292,12 +430,31 @@ func (s *Server) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	input, _ := json.Marshal(map[string]any{
-		"trigger": "webhook",
-		"body":    string(bodyBytes),
-		"query":   r.URL.RawQuery,
+	// data = parsed JSON body when possible, else the raw string.
+	var data json.RawMessage
+	if json.Valid(bodyBytes) && len(bodyBytes) > 0 {
+		data = json.RawMessage(bodyBytes)
+	} else {
+		data, _ = json.Marshal(string(bodyBytes))
+	}
+	// event id: prefer an "id" field in the body so {{event.id}} actor binding works.
+	eventID := ""
+	if json.Valid(bodyBytes) {
+		var probe map[string]any
+		if json.Unmarshal(bodyBytes, &probe) == nil {
+			if v, ok := probe["id"]; ok {
+				eventID, _ = v.(string)
+			}
+		}
+	}
+	exe, err := s.svc.RunExecution(r.Context(), platform.RunRequest{
+		ScriptID:      t.ScriptID,
+		Kind:          "webhook",
+		TriggerID:     t.ID,
+		ActorTemplate: t.ActorTemplate,
+		EventID:       eventID,
+		Data:          data,
 	})
-	exe, err := s.svc.RunExecution(r.Context(), t.ScriptID, 0, input, "webhook:"+t.ID)
 	writeOrErr(w, exe, err)
 }
 

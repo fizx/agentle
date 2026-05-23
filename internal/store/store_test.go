@@ -22,7 +22,7 @@ func openTest(t *testing.T) *Store {
 func TestVersionsAreImmutableAndIncrement(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	if _, err := s.CreateScript(ctx, "s1", "hello"); err != nil {
+	if _, err := s.CreateScript(ctx, "s1", "hello", "u1"); err != nil {
 		t.Fatal(err)
 	}
 	v1, err := s.SaveVersion(ctx, "s1", "def main(i): return 1", "img", nil)
@@ -53,10 +53,10 @@ func TestVersionsAreImmutableAndIncrement(t *testing.T) {
 func TestSecretsNeverListed(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	if err := s.PutSecret(ctx, "OPENAI_KEY", "sk-supersecret"); err != nil {
+	if err := s.PutSecret(ctx, "OPENAI_KEY", ScopeGlobal, "sk-supersecret"); err != nil {
 		t.Fatal(err)
 	}
-	names, err := s.ListSecretNames(ctx)
+	names, err := s.ListSecretNames(ctx, ScopeGlobal)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,9 +64,32 @@ func TestSecretsNeverListed(t *testing.T) {
 		t.Fatalf("names = %v", names)
 	}
 	// Value retrievable only via the internal resolver path.
-	v, _ := s.GetSecret(ctx, "OPENAI_KEY")
+	v, _ := s.ResolveSecret(ctx, "OPENAI_KEY", "any-script")
 	if v != "sk-supersecret" {
 		t.Fatalf("secret value = %q", v)
+	}
+}
+
+func TestSecretScopePrecedence(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if err := s.PutSecret(ctx, "KEY", ScopeGlobal, "global-val"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSecret(ctx, "KEY", ScriptScope("s1"), "script-val"); err != nil {
+		t.Fatal(err)
+	}
+	// Script s1 sees its own scoped value; others fall back to global.
+	if v, _ := s.ResolveSecret(ctx, "KEY", "s1"); v != "script-val" {
+		t.Fatalf("s1 resolved %q, want script-val", v)
+	}
+	if v, _ := s.ResolveSecret(ctx, "KEY", "s2"); v != "global-val" {
+		t.Fatalf("s2 resolved %q, want global-val", v)
+	}
+	// Per-script secret list is isolated.
+	names, _ := s.ListSecretNames(ctx, ScriptScope("s1"))
+	if len(names) != 1 || names[0] != "KEY" {
+		t.Fatalf("script names = %v", names)
 	}
 }
 
@@ -104,9 +127,9 @@ func TestDurableLogReplayAndConflict(t *testing.T) {
 func TestExecutionLifecycle(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	_, _ = s.CreateScript(ctx, "s1", "x")
+	_, _ = s.CreateScript(ctx, "s1", "x", "u1")
 	_, _ = s.SaveVersion(ctx, "s1", "def main(i): return i", "", nil)
-	e := Execution{ID: "ex1", ScriptID: "s1", Version: 1, Status: int(engine.StatusRunning), Input: json.RawMessage(`{"a":1}`), Trigger: "manual"}
+	e := Execution{ID: "ex1", ScriptID: "s1", Version: 1, ActorID: "exec:ex1", Status: int(engine.StatusRunning), Input: json.RawMessage(`{"a":1}`), Trigger: "dashboard"}
 	if err := s.CreateExecution(ctx, e); err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +140,11 @@ func TestExecutionLifecycle(t *testing.T) {
 	if got.Status != int(engine.StatusCompleted) || string(got.Output) != `{"ok":true}` {
 		t.Fatalf("execution = %+v", got)
 	}
-	list, _ := s.ListExecutions(ctx, "s1", 10)
+	list, _ := s.ListExecutions(ctx, "s1", 10, 0)
 	if len(list) != 1 {
 		t.Fatalf("list = %d", len(list))
+	}
+	if list[0].ActorID != "exec:ex1" {
+		t.Fatalf("actor_id not persisted: %q", list[0].ActorID)
 	}
 }

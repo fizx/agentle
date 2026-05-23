@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,10 +25,27 @@ type GrantRef struct {
 	ConfigID   string `json:"config_id"`  // -> ToolConfig
 }
 
+// Role is a principal's RBAC level. admin > user.
+type Role string
+
+const (
+	RoleAdmin Role = "admin"
+	RoleUser  Role = "user"
+)
+
+// User is a principal in the RBAC hierarchy (admin > user > script).
+type User struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Role      Role   `json:"role"`
+	CreatedAt int64  `json:"created_at"`
+}
+
 // Script is a named program with a current (latest) version pointer.
 type Script struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
+	Owner          string `json:"owner"`
 	CurrentVersion uint64 `json:"current_version"`
 	CreatedAt      int64  `json:"created_at"`
 }
@@ -52,11 +70,14 @@ type ToolConfig struct {
 	CreatedAt  int64           `json:"created_at"`
 }
 
-// Execution is one durable run of a pinned version.
+// Execution is one durable run of a pinned version, owned by an actor (the kv
+// namespace). Manual/anonymous runs get a unique actor; named-actor triggers
+// share one.
 type Execution struct {
 	ID        string          `json:"id"`
 	ScriptID  string          `json:"script_id"`
 	Version   uint64          `json:"version"`
+	ActorID   string          `json:"actor_id"`
 	Status    int             `json:"status"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
@@ -69,12 +90,15 @@ type Execution struct {
 // Trigger fires executions: cron (spec = cron expression) or webhook (spec =
 // opaque token in the inbound URL).
 type Trigger struct {
-	ID        string `json:"id"`
-	ScriptID  string `json:"script_id"`
-	Kind      string `json:"kind"` // "cron" | "webhook"
-	Spec      string `json:"spec"`
-	Enabled   bool   `json:"enabled"`
-	CreatedAt int64  `json:"created_at"`
+	ID       string `json:"id"`
+	ScriptID string `json:"script_id"`
+	Kind     string `json:"kind"` // "cron" | "webhook"
+	Spec     string `json:"spec"`
+	// ActorTemplate optionally binds runs to a named actor, interpolated against
+	// the event envelope, e.g. "webhook-{{event.id}}". Empty = anonymous actor.
+	ActorTemplate string `json:"actor_template"`
+	Enabled       bool   `json:"enabled"`
+	CreatedAt     int64  `json:"created_at"`
 }
 
 // Store wraps a SQLite database.
@@ -104,14 +128,34 @@ func Open(dsn string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Additive migrations for databases created by earlier versions. Duplicate
+	// column errors are expected and ignored.
+	for _, stmt := range []string{
+		`ALTER TABLE scripts ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE executions ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE triggers ADD COLUMN actor_template TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
 }
 
 const schema = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS scripts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  owner TEXT NOT NULL DEFAULT '',
   current_version INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
 );
@@ -132,14 +176,17 @@ CREATE TABLE IF NOT EXISTS tool_configs (
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS secrets (
-  name TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'global',
   value TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (name, scope)
 );
 CREATE TABLE IF NOT EXISTS executions (
   id TEXT PRIMARY KEY,
   script_id TEXT NOT NULL,
   version INTEGER NOT NULL,
+  actor_id TEXT NOT NULL DEFAULT '',
   status INTEGER NOT NULL,
   input TEXT,
   output TEXT,
@@ -154,6 +201,7 @@ CREATE TABLE IF NOT EXISTS triggers (
   script_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   spec TEXT NOT NULL,
+  actor_template TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
@@ -175,10 +223,10 @@ func now() int64 { return time.Now().UnixNano() }
 
 // --- Scripts & versions ---------------------------------------------------
 
-func (s *Store) CreateScript(ctx context.Context, id, name string) (*Script, error) {
-	sc := &Script{ID: id, Name: name, CreatedAt: now()}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO scripts(id,name,current_version,created_at) VALUES(?,?,0,?)`,
-		sc.ID, sc.Name, sc.CreatedAt)
+func (s *Store) CreateScript(ctx context.Context, id, name, owner string) (*Script, error) {
+	sc := &Script{ID: id, Name: name, Owner: owner, CreatedAt: now()}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO scripts(id,name,owner,current_version,created_at) VALUES(?,?,?,0,?)`,
+		sc.ID, sc.Name, sc.Owner, sc.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -187,29 +235,55 @@ func (s *Store) CreateScript(ctx context.Context, id, name string) (*Script, err
 
 func (s *Store) GetScript(ctx context.Context, id string) (*Script, error) {
 	var sc Script
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,current_version,created_at FROM scripts WHERE id=?`, id).
-		Scan(&sc.ID, &sc.Name, &sc.CurrentVersion, &sc.CreatedAt)
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,owner,current_version,created_at FROM scripts WHERE id=?`, id).
+		Scan(&sc.ID, &sc.Name, &sc.Owner, &sc.CurrentVersion, &sc.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return &sc, err
 }
 
-func (s *Store) ListScripts(ctx context.Context) ([]Script, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,current_version,created_at FROM scripts ORDER BY name`)
+func (s *Store) ListScripts(ctx context.Context, limit, offset int) ([]Script, error) {
+	limit, offset = page(limit, offset)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,owner,current_version,created_at FROM scripts ORDER BY name LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Script
+	out := []Script{}
 	for rows.Next() {
 		var sc Script
-		if err := rows.Scan(&sc.ID, &sc.Name, &sc.CurrentVersion, &sc.CreatedAt); err != nil {
+		if err := rows.Scan(&sc.ID, &sc.Name, &sc.Owner, &sc.CurrentVersion, &sc.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, sc)
 	}
 	return out, rows.Err()
+}
+
+// DeleteScript removes a script and its versions and triggers. Executions and
+// their event logs are retained for audit.
+func (s *Store) DeleteScript(ctx context.Context, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM versions WHERE script_id=?`,
+		`DELETE FROM triggers WHERE script_id=?`,
+		`DELETE FROM secrets WHERE scope=?`,
+		`DELETE FROM scripts WHERE id=?`,
+	} {
+		arg := id
+		if strings.Contains(q, "secrets") {
+			arg = "script:" + id
+		}
+		if _, err := tx.ExecContext(ctx, q, arg); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SaveVersion appends a new immutable version and advances current_version.
@@ -333,33 +407,57 @@ func (s *Store) ListToolConfigs(ctx context.Context) ([]ToolConfig, error) {
 	return out, rows.Err()
 }
 
-// PutSecret stores a secret value. Values are never returned by any read method.
-func (s *Store) PutSecret(ctx context.Context, name, value string) error {
+// ScopeGlobal is the scope for secrets available to all scripts. Per-script
+// secrets use scope "script:<id>" and take precedence.
+const ScopeGlobal = "global"
+
+// ScriptScope is the secret scope for a given script.
+func ScriptScope(scriptID string) string { return "script:" + scriptID }
+
+// PutSecret stores a secret value in a scope. Values are never returned by any
+// read method.
+func (s *Store) PutSecret(ctx context.Context, name, scope, value string) error {
+	if scope == "" {
+		scope = ScopeGlobal
+	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO secrets(name,value,created_at) VALUES(?,?,?)
-         ON CONFLICT(name) DO UPDATE SET value=excluded.value`, name, value, now())
+		`INSERT INTO secrets(name,scope,value,created_at) VALUES(?,?,?,?)
+         ON CONFLICT(name,scope) DO UPDATE SET value=excluded.value`, name, scope, value, now())
 	return err
 }
 
-// GetSecret resolves a secret value for capability binding. Internal use only —
-// not exposed via the control-plane API.
-func (s *Store) GetSecret(ctx context.Context, name string) (string, error) {
+func (s *Store) DeleteSecret(ctx context.Context, name, scope string) error {
+	if scope == "" {
+		scope = ScopeGlobal
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM secrets WHERE name=? AND scope=?`, name, scope)
+	return err
+}
+
+// ResolveSecret returns the value of name, preferring the script scope over the
+// global scope. Internal use only — not exposed via the control-plane API.
+func (s *Store) ResolveSecret(ctx context.Context, name, scriptID string) (string, error) {
 	var v string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM secrets WHERE name=?`, name).Scan(&v)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT value FROM secrets WHERE name=? AND scope IN (?, ?) ORDER BY scope=? DESC LIMIT 1`,
+		name, ScriptScope(scriptID), ScopeGlobal, ScriptScope(scriptID)).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotFound
 	}
 	return v, err
 }
 
-// ListSecretNames returns only names — never values.
-func (s *Store) ListSecretNames(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name FROM secrets ORDER BY name`)
+// ListSecretNames returns only names in a scope — never values.
+func (s *Store) ListSecretNames(ctx context.Context, scope string) ([]string, error) {
+	if scope == "" {
+		scope = ScopeGlobal
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM secrets WHERE scope=? ORDER BY name`, scope)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	out := []string{}
 	for rows.Next() {
 		var n string
 		if err := rows.Scan(&n); err != nil {
@@ -378,9 +476,9 @@ func (s *Store) CreateExecution(ctx context.Context, e Execution) error {
 	}
 	e.UpdatedAt = e.CreatedAt
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO executions(id,script_id,version,status,input,output,error,trigger,created_at,updated_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		e.ID, e.ScriptID, e.Version, e.Status, nullRaw(e.Input), nullRaw(e.Output), e.Error, e.Trigger, e.CreatedAt, e.UpdatedAt)
+		`INSERT INTO executions(id,script_id,version,actor_id,status,input,output,error,trigger,created_at,updated_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		e.ID, e.ScriptID, e.Version, e.ActorID, e.Status, nullRaw(e.Input), nullRaw(e.Output), e.Error, e.Trigger, e.CreatedAt, e.UpdatedAt)
 	return err
 }
 
@@ -395,8 +493,8 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*Execution, error)
 	var e Execution
 	var input, output sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,script_id,version,status,input,output,error,trigger,created_at,updated_at FROM executions WHERE id=?`, id).
-		Scan(&e.ID, &e.ScriptID, &e.Version, &e.Status, &input, &output, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt)
+		`SELECT id,script_id,version,actor_id,status,input,output,error,trigger,created_at,updated_at FROM executions WHERE id=?`, id).
+		Scan(&e.ID, &e.ScriptID, &e.Version, &e.ActorID, &e.Status, &input, &output, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -412,27 +510,25 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*Execution, error)
 	return &e, nil
 }
 
-func (s *Store) ListExecutions(ctx context.Context, scriptID string, limit int) ([]Execution, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	q := `SELECT id,script_id,version,status,error,trigger,created_at,updated_at FROM executions`
+func (s *Store) ListExecutions(ctx context.Context, scriptID string, limit, offset int) ([]Execution, error) {
+	limit, offset = page(limit, offset)
+	q := `SELECT id,script_id,version,actor_id,status,error,trigger,created_at,updated_at FROM executions`
 	args := []any{}
 	if scriptID != "" {
 		q += ` WHERE script_id=?`
 		args = append(args, scriptID)
 	}
-	q += ` ORDER BY created_at DESC LIMIT ?`
-	args = append(args, limit)
+	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Execution
+	out := []Execution{}
 	for rows.Next() {
 		var e Execution
-		if err := rows.Scan(&e.ID, &e.ScriptID, &e.Version, &e.Status, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ScriptID, &e.Version, &e.ActorID, &e.Status, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, e)
@@ -447,9 +543,9 @@ func (s *Store) PutTrigger(ctx context.Context, t Trigger) error {
 		t.CreatedAt = now()
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO triggers(id,script_id,kind,spec,enabled,created_at) VALUES(?,?,?,?,?,?)
-         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, spec=excluded.spec, enabled=excluded.enabled`,
-		t.ID, t.ScriptID, t.Kind, t.Spec, boolInt(t.Enabled), t.CreatedAt)
+		`INSERT INTO triggers(id,script_id,kind,spec,actor_template,enabled,created_at) VALUES(?,?,?,?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, spec=excluded.spec, actor_template=excluded.actor_template, enabled=excluded.enabled`,
+		t.ID, t.ScriptID, t.Kind, t.Spec, t.ActorTemplate, boolInt(t.Enabled), t.CreatedAt)
 	return err
 }
 
@@ -458,12 +554,20 @@ func (s *Store) DeleteTrigger(ctx context.Context, id string) error {
 	return err
 }
 
-func (s *Store) ListTriggers(ctx context.Context, kind string) ([]Trigger, error) {
-	q := `SELECT id,script_id,kind,spec,enabled,created_at FROM triggers`
+func (s *Store) ListTriggers(ctx context.Context, kind, scriptID string) ([]Trigger, error) {
+	q := `SELECT id,script_id,kind,spec,actor_template,enabled,created_at FROM triggers`
 	var args []any
+	where := []string{}
 	if kind != "" {
-		q += ` WHERE kind=?`
+		where = append(where, "kind=?")
 		args = append(args, kind)
+	}
+	if scriptID != "" {
+		where = append(where, "script_id=?")
+		args = append(args, scriptID)
+	}
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
 	q += ` ORDER BY created_at DESC`
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -471,11 +575,11 @@ func (s *Store) ListTriggers(ctx context.Context, kind string) ([]Trigger, error
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Trigger
+	out := []Trigger{}
 	for rows.Next() {
 		var t Trigger
 		var en int
-		if err := rows.Scan(&t.ID, &t.ScriptID, &t.Kind, &t.Spec, &en, &t.CreatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.ScriptID, &t.Kind, &t.Spec, &t.ActorTemplate, &en, &t.CreatedAt); err != nil {
 			return nil, err
 		}
 		t.Enabled = en != 0
@@ -489,8 +593,8 @@ func (s *Store) FindWebhookTrigger(ctx context.Context, token string) (*Trigger,
 	var t Trigger
 	var en int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,script_id,kind,spec,enabled,created_at FROM triggers WHERE kind='webhook' AND spec=?`, token).
-		Scan(&t.ID, &t.ScriptID, &t.Kind, &t.Spec, &en, &t.CreatedAt)
+		`SELECT id,script_id,kind,spec,actor_template,enabled,created_at FROM triggers WHERE kind='webhook' AND spec=?`, token).
+		Scan(&t.ID, &t.ScriptID, &t.Kind, &t.Spec, &t.ActorTemplate, &en, &t.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -502,6 +606,73 @@ func (s *Store) FindWebhookTrigger(ctx context.Context, token string) (*Trigger,
 		return nil, ErrNotFound
 	}
 	return &t, nil
+}
+
+// --- Users -----------------------------------------------------------------
+
+func (s *Store) CreateUser(ctx context.Context, id, name string, role Role) (*User, error) {
+	if role == "" {
+		role = RoleUser
+	}
+	u := &User{ID: id, Name: name, Role: role, CreatedAt: now()}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO users(id,name,role,created_at) VALUES(?,?,?,?)
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, role=excluded.role`,
+		u.ID, u.Name, string(u.Role), u.CreatedAt)
+	return u, err
+}
+
+func (s *Store) GetUser(ctx context.Context, id string) (*User, error) {
+	var u User
+	var role string
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,role,created_at FROM users WHERE id=?`, id).
+		Scan(&u.ID, &u.Name, &role, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	u.Role = Role(role)
+	return &u, err
+}
+
+func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,role,created_at FROM users ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []User{}
+	for rows.Next() {
+		var u User
+		var role string
+		if err := rows.Scan(&u.ID, &u.Name, &role, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		u.Role = Role(role)
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) DeleteUser(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE id=?`, id)
+	return err
+}
+
+// CountUsers reports how many users exist (for first-run admin seeding).
+func (s *Store) CountUsers(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&n)
+	return n, err
+}
+
+func page(limit, offset int) (int, int) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
 }
 
 func nullRaw(r json.RawMessage) any {

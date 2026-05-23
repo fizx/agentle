@@ -30,21 +30,22 @@ func TestEndToEndRunWithGrant(t *testing.T) {
 	if err := s.Store.PutToolConfig(ctx, store.ToolConfig{ID: "llm-mock", Capability: "llm", Config: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Store.CreateScript(ctx, "s1", "greeter"); err != nil {
+	if _, err := s.Store.CreateScript(ctx, "s1", "greeter", "u1"); err != nil {
 		t.Fatal(err)
 	}
 	src := `
 def main(input):
-    log("hello", input["name"])
-    kv_set("last", input["name"])
-    reply = llm([{"role": "user", "content": "hi " + input["name"]}])
-    return {"reply": reply["content"], "last": kv_get("last")}
+    name = input["data"]["name"]
+    log("hello", name)
+    store("last", name)
+    reply = llm([{"role": "user", "content": "hi " + name}])
+    return {"reply": reply["content"], "last": fetch("last")}
 `
 	if _, err := s.Store.SaveVersion(ctx, "s1", src, "", []store.GrantRef{{Capability: "llm", ConfigID: "llm-mock"}}); err != nil {
 		t.Fatal(err)
 	}
 
-	exe, err := s.RunExecution(ctx, "s1", 0, json.RawMessage(`{"name":"kyle"}`), "manual")
+	exe, err := s.RunExecution(ctx, RunRequest{ScriptID: "s1", Kind: "dashboard", Data: json.RawMessage(`{"name":"kyle"}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,14 +80,14 @@ def main(input):
 func TestUngrantedCapabilityIsDenied(t *testing.T) {
 	s := newService(t)
 	ctx := context.Background()
-	_, _ = s.Store.CreateScript(ctx, "s1", "x")
+	_, _ = s.Store.CreateScript(ctx, "s1", "x", "u1")
 	// Script calls llm but has NO grant for it.
 	src := `
 def main(input):
     return llm([{"role":"user","content":"hi"}])
 `
 	_, _ = s.Store.SaveVersion(ctx, "s1", src, "", nil)
-	exe, err := s.RunExecution(ctx, "s1", 0, json.RawMessage(`null`), "manual")
+	exe, err := s.RunExecution(ctx, RunRequest{ScriptID: "s1", Kind: "dashboard"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,13 +103,13 @@ func TestReplayRecoveryIsDeterministic(t *testing.T) {
 	s := newService(t)
 	ctx := context.Background()
 	_ = s.Store.PutToolConfig(ctx, store.ToolConfig{ID: "llm-mock", Capability: "llm"})
-	_, _ = s.Store.CreateScript(ctx, "s1", "x")
+	_, _ = s.Store.CreateScript(ctx, "s1", "x", "u1")
 	src := `
 def main(input):
     return rand_int(1000000)
 `
 	_, _ = s.Store.SaveVersion(ctx, "s1", src, "", nil)
-	exe, err := s.RunExecution(ctx, "s1", 0, json.RawMessage(`null`), "manual")
+	exe, err := s.RunExecution(ctx, RunRequest{ScriptID: "s1", Kind: "dashboard"})
 	if err != nil {
 		t.Fatal(err)
 	}
