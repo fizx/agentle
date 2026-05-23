@@ -1,0 +1,14 @@
+# Go
+/bin/
+*.test
+*.out
+
+# Local data
+/data/
+*.db
+*.db-*
+
+# Node / dashboard
+node_modules/
+web/dist/
+.DS_Store
