@@ -10,5 +10,5 @@
 
 # Node / dashboard
 node_modules/
-web/dist/
 .DS_Store
+# web/dist is committed so the Go binary embeds the dashboard (self-contained)
