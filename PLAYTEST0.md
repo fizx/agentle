@@ -1,0 +1,17 @@
+- Is test coverage good enough?
+- Where is the user RBAC/admin?  How do I know who I am.  Where's user management?
+- Should be able to access triggers also from script page.
+- How to delete script?
+- prefer store/load to kv_get/kv_set as an api
+- where's a shell-based example?  please add one.
+- version restore on scripts.
+- runs visible per-script in addition to globally
+- secrets configurable per script and globally
+- cron syntax is nice, but provide simple hourly, etc alternatives.
+- keep in mind that in your example, you shouldn't see the same kv store between runs, because the kv store should be namespaced by actor id, and the event handler is an anonymous actor.
+- a trigger may optionally bind a script to an actor id, specifying the id via mustache string on the inbound event, e.g. "webhook-{{event.id}}"
+- codemirror should autocomplete
+- (from) dashboard is a trigger type.
+- triggers should send structured json events with {...metadata, data} # i.e. data is the provided input.
+- pagination should exist on lists.
+- does the sandbox work?
