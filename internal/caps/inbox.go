@@ -14,16 +14,18 @@ type MessageQueue interface {
 	Claim(ctx context.Context, workspace, idemKey string) (json.RawMessage, bool, error)
 }
 
-// Inbox returns the "inbox" capability for one workspace: send(workspace, data)
-// enqueues into another workspace; recv(timeout) blocks for this workspace's next
-// message (the actor "yield" point). recv is crash-safe via the call's IdemKey.
-func Inbox(q MessageQueue, workspace string, maxWait time.Duration, poll time.Duration) engine.Executor {
-	if maxWait == 0 {
-		maxWait = 60 * time.Second
-	}
-	if poll == 0 {
-		poll = 200 * time.Millisecond
-	}
+// Inbox returns the "inbox" capability for one workspace:
+//
+//   - send(workspace, data) enqueues a message into another workspace.
+//   - recv(deadline) is the actor "yield" point. It is non-blocking: if a message
+//     is waiting it is claimed (crash-safe via the call's IdemKey) and returned;
+//     otherwise the execution durably suspends. The engine parks it and resumes
+//     by replay when a message arrives at this workspace or the deadline passes.
+//
+// deadline is an absolute unix-nanos wake time (0 = wait indefinitely), computed
+// by the recv builtin from a memoized now() so it is stable across resumes. Once
+// the deadline has passed with an empty inbox, recv returns null (timed out).
+func Inbox(q MessageQueue, workspace string) engine.Executor {
 	return engine.ExecutorFunc(func(ctx context.Context, inv engine.Invocation) (json.RawMessage, error) {
 		switch inv.Method {
 		case "send":
@@ -44,31 +46,24 @@ func Inbox(q MessageQueue, workspace string, maxWait time.Duration, poll time.Du
 
 		case "recv":
 			var a struct {
-				TimeoutSeconds float64 `json:"timeout_seconds"`
+				Deadline int64 `json:"deadline"` // absolute unix nanos; 0 = no deadline
 			}
 			_ = json.Unmarshal(inv.Args, &a)
-			wait := time.Duration(a.TimeoutSeconds * float64(time.Second))
-			if wait <= 0 || wait > maxWait {
-				wait = maxWait
+			msg, ok, err := q.Claim(ctx, workspace, inv.IdemKey)
+			if err != nil {
+				return nil, err
 			}
-			deadline := time.Now().Add(wait)
-			for {
-				msg, ok, err := q.Claim(ctx, workspace, inv.IdemKey)
-				if err != nil {
-					return nil, err
-				}
-				if ok {
-					return msg, nil
-				}
-				if time.Now().After(deadline) {
-					return json.RawMessage(`null`), nil // timed out: no message
-				}
-				select {
-				case <-time.After(poll):
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
+			if ok {
+				return msg, nil
 			}
+			// Empty inbox. If a deadline was set and has already passed, this recv
+			// times out (a deterministic null result). Otherwise suspend until a
+			// message arrives or the deadline fires.
+			if a.Deadline > 0 && time.Now().UnixNano() >= a.Deadline {
+				return json.RawMessage(`null`), nil
+			}
+			return nil, &engine.SuspendError{Suspension: engine.Suspension{Workspace: workspace, WakeAt: a.Deadline}}
+
 		default:
 			return json.RawMessage(`null`), nil
 		}

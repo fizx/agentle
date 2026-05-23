@@ -44,6 +44,9 @@ func (r *Runner) Run(ctx context.Context, m engine.Mediator, source string, inpu
 
 	globals, err := starlark.ExecFileOptions(opts, thread, "main.star", source, predeclared())
 	if err != nil {
+		if s := suspendOf(thread); s != nil {
+			return nil, s
+		}
 		return nil, scriptError(err)
 	}
 
@@ -63,6 +66,9 @@ func (r *Runner) Run(ctx context.Context, m engine.Mediator, source string, inpu
 
 	ret, err := starlark.Call(thread, mainFn, starlark.Tuple{inputVal}, nil)
 	if err != nil {
+		if s := suspendOf(thread); s != nil {
+			return nil, s
+		}
 		return nil, scriptError(err)
 	}
 

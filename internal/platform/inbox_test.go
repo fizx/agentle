@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/kylemaxwell/agentle/internal/engine"
 	"github.com/kylemaxwell/agentle/internal/store"
@@ -72,9 +73,8 @@ def main(input):
 	}
 }
 
-func TestInboxRecvTimeoutReturnsNull(t *testing.T) {
+func TestInboxRecvTimeoutSuspendsThenReturnsNull(t *testing.T) {
 	s := newService(t)
-	s.Cfg.MaxRecvWait = 0 // executor default applies; timeout arg keeps it short
 	ctx := context.Background()
 	_, _ = s.Store.CreateScript(ctx, "s1", "waiter", "u1")
 	src := `
@@ -87,8 +87,66 @@ def main(input):
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Empty inbox: recv durably suspends until its deadline (no goroutine blocks).
+	if exe.Status != int(engine.StatusSuspended) {
+		t.Fatalf("expected suspended, status=%d err=%s", exe.Status, exe.Error)
+	}
+	// Past the deadline, the dispatcher resumes it and recv times out to null.
+	time.Sleep(300 * time.Millisecond)
+	s.Pump(ctx, nil)
+	exe, _ = s.Store.GetExecution(ctx, exe.ID)
 	if exe.Status != int(engine.StatusCompleted) || string(exe.Output) != `{"got":null}` {
 		t.Fatalf("status=%d out=%s err=%s", exe.Status, exe.Output, exe.Error)
+	}
+}
+
+// TestDurableSuspendResumeOnMessage is the headline durable-suspend path: an actor
+// recv()s with no message and parks (StatusSuspended) instead of blocking; a later
+// message from another execution wakes it via the dispatcher, and it resumes by
+// replaying the log and continues from the recv.
+func TestDurableSuspendResumeOnMessage(t *testing.T) {
+	s := newService(t)
+	ctx := context.Background()
+	_, _ = s.Store.CreateScript(ctx, "s1", "agent", "u1")
+	src := `
+def main(input):
+    if input["data"]["act"] == "send":
+        send("agent-1", {"v": input["data"]["v"]})
+        return "sent"
+    m = recv()              # no timeout: suspend indefinitely until a message
+    return {"got": m["v"]}
+`
+	_, _ = s.Store.SaveVersion(ctx, "s1", src, "", nil)
+
+	// Start the agent in named workspace "agent-1"; empty inbox => durable suspend.
+	agent, err := s.RunExecution(ctx, RunRequest{
+		ScriptID: "s1", Kind: "webhook", ActorTemplate: "agent-1",
+		Data: json.RawMessage(`{"act":"recv"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Status != int(engine.StatusSuspended) {
+		t.Fatalf("expected suspended, got status=%d err=%s", agent.Status, agent.Error)
+	}
+	if _, err := s.Store.GetSuspension(ctx, agent.ID); err != nil {
+		t.Fatalf("suspension row not recorded: %v", err)
+	}
+
+	// A producer sends a message into the agent's workspace, then the dispatcher
+	// resumes the parked agent.
+	prod, err := s.RunExecution(ctx, RunRequest{ScriptID: "s1", Kind: "webhook", Data: json.RawMessage(`{"act":"send","v":7}`)})
+	if err != nil || prod.Status != int(engine.StatusCompleted) {
+		t.Fatalf("producer status=%d err=%s", prod.Status, prod.Error)
+	}
+	s.Pump(ctx, nil)
+
+	agent, _ = s.Store.GetExecution(ctx, agent.ID)
+	if agent.Status != int(engine.StatusCompleted) || string(agent.Output) != `{"got":7}` {
+		t.Fatalf("resume failed: status=%d out=%s err=%s", agent.Status, agent.Output, agent.Error)
+	}
+	if _, err := s.Store.GetSuspension(ctx, agent.ID); err != store.ErrNotFound {
+		t.Fatalf("suspension row should be cleared after resume, got %v", err)
 	}
 }
 

@@ -5,12 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// defaultSnapshotDebounce bounds how often a long-running execution snapshots its
+// home dir to object storage: at most once per interval while dirty, plus a final
+// snapshot on teardown (FlushFS). Trades fine-grained crash recovery for far fewer
+// object-storage writes — recovery replays from the last barrier and re-executes
+// any fs-mutating RPCs after it (which must be idempotent or self-barriering).
+const defaultSnapshotDebounce = 60 * time.Second
 
 // CallError is a memoized capability failure, surfaced to the script identically
 // on first execution and on replay.
@@ -39,6 +47,11 @@ type Mediator interface {
 	// Child returns a mediator rooted at a fresh, deterministic subtree. Used to
 	// give each branch of structured concurrency its own stable call-key space.
 	Child() Mediator
+	// FlushFS forces a snapshot barrier if the home dir has uncommitted changes.
+	// Called on graceful teardown (e.g. before a durable suspension) so the latest
+	// home-dir state is recorded in the log for a later resume. No-op if clean or
+	// if the execution has no sandbox.
+	FlushFS(ctx context.Context) error
 }
 
 // medState is shared across all mediator nodes of one execution. Appends and the
@@ -50,9 +63,22 @@ type medState struct {
 	env   Environment
 	sb    Sandbox
 
-	mu     sync.Mutex
-	cursor Seq                  // next seq to append at
-	memo   map[string]RPCRecord // callKey -> recorded Result
+	debounce time.Duration // min interval between fs snapshot barriers
+
+	mu       sync.Mutex
+	cursor   Seq                  // next seq to append at
+	memo     map[string]RPCRecord // callKey -> recorded Result
+	fsDirty  bool                 // home dir mutated since the last barrier
+	lastSnap time.Time            // when the last barrier was taken
+}
+
+// MediatorOption configures a root mediator at construction.
+type MediatorOption func(*medState)
+
+// WithDebounce sets the minimum interval between fs snapshot barriers. Zero means
+// snapshot on every fs-mutating RPC (the strict, per-RPC crash-safety behavior).
+func WithDebounce(d time.Duration) MediatorOption {
+	return func(st *medState) { st.debounce = d }
 }
 
 // mediator is one node in the call tree: a prefix path plus a local counter.
@@ -65,14 +91,19 @@ type mediator struct {
 // NewMediator builds the root mediator for an execution. existing is the log read
 // back for replay; its Result events seed the memo and its length sets the append
 // cursor so fresh calls continue after the replayed prefix.
-func NewMediator(exec ExecutionID, log Log, lease Lease, env Environment, sb Sandbox, existing []Event) Mediator {
+func NewMediator(exec ExecutionID, log Log, lease Lease, env Environment, sb Sandbox, existing []Event, opts ...MediatorOption) Mediator {
 	st := &medState{
-		exec:  exec,
-		log:   log,
-		lease: lease,
-		env:   env,
-		sb:    sb,
-		memo:  make(map[string]RPCRecord),
+		exec:     exec,
+		log:      log,
+		lease:    lease,
+		env:      env,
+		sb:       sb,
+		memo:     make(map[string]RPCRecord),
+		debounce: defaultSnapshotDebounce,
+		lastSnap: time.Now(),
+	}
+	for _, o := range opts {
+		o(st)
 	}
 	for _, ev := range existing {
 		if ev.Seq+1 > st.cursor {
@@ -102,6 +133,10 @@ func (m *mediator) nextKey() string {
 
 func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, error) {
 	key := m.nextKey()
+	// Every call gets a stable idempotency key derived from its deterministic
+	// call position. Executors that dedupe side effects (non-idempotent RPCs, the
+	// inbox claim) use it; it is identical across replay/resume.
+	inv.IdemKey = idemKey(m.st.exec, key)
 	argsHash := hashArgs(inv)
 
 	// Fast path: memo hit (replay). Verify the recorded call matches.
@@ -132,7 +167,6 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 	// effect may have fired. The stable IdemKey is handed to the executor so it
 	// can dedupe external side effects across replay/retry.
 	if !inv.Idempotent {
-		inv.IdemKey = idemKey(m.st.exec, key)
 		intent := Event{Kind: EventRPCIntent, WallTime: time.Now().UnixNano(), RPC: &RPCRecord{
 			CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, IdemKey: inv.IdemKey,
 		}}
@@ -144,10 +178,15 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 	// Execute the real RPC outside the lock.
 	res, callErr := exec.Execute(ctx, inv)
 
-	rec := &RPCRecord{CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash}
-	if !inv.Idempotent {
-		rec.IdemKey = idemKey(m.st.exec, key)
+	// Durable suspension: the call cannot make progress yet (e.g. recv with an
+	// empty inbox). Record nothing — on resume this call re-executes from the same
+	// call key and either succeeds or suspends again — and propagate the signal so
+	// the engine parks the execution.
+	if errors.Is(callErr, ErrSuspend) {
+		return nil, callErr
 	}
+
+	rec := &RPCRecord{CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, IdemKey: inv.IdemKey}
 	if callErr != nil {
 		rec.Err = callErr.Error()
 	} else {
@@ -158,18 +197,18 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 		return nil, err
 	}
 
-	// fs-mutating calls force a snapshot barrier on commit.
+	// fs-mutating calls mark the home dir dirty; we only snapshot when the debounce
+	// interval has elapsed (or on FlushFS at teardown). This keeps object-storage
+	// writes bounded for chatty fs workloads.
 	if inv.MutatesFS && callErr == nil && m.st.sb != nil {
-		skey, err := m.st.sb.Snapshot(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("fs snapshot barrier: %w", err)
-		}
 		m.st.mu.Lock()
-		at := m.st.cursor
+		m.st.fsDirty = true
+		due := time.Since(m.st.lastSnap) >= m.st.debounce
 		m.st.mu.Unlock()
-		barrier := Event{Kind: EventFSBarrier, WallTime: time.Now().UnixNano(), Snapshot: &FSSnapshot{Key: skey, At: at}}
-		if err := m.append(ctx, barrier, true); err != nil {
-			return nil, err
+		if due {
+			if err := m.snapshotBarrier(ctx); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -177,6 +216,39 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 		return nil, &CallError{Capability: inv.Capability, Method: inv.Method, Msg: callErr.Error()}
 	}
 	return res, nil
+}
+
+// FlushFS records a final snapshot barrier if the home dir is dirty, so a later
+// resume restores the latest state. Called on graceful teardown (suspension).
+func (m *mediator) FlushFS(ctx context.Context) error {
+	m.st.mu.Lock()
+	dirty := m.st.fsDirty && m.st.sb != nil
+	m.st.mu.Unlock()
+	if !dirty {
+		return nil
+	}
+	return m.snapshotBarrier(ctx)
+}
+
+// snapshotBarrier snapshots the home dir and appends an FSBarrier event, then
+// clears the dirty flag and resets the debounce clock.
+func (m *mediator) snapshotBarrier(ctx context.Context) error {
+	skey, err := m.st.sb.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("fs snapshot barrier: %w", err)
+	}
+	m.st.mu.Lock()
+	at := m.st.cursor
+	m.st.mu.Unlock()
+	barrier := Event{Kind: EventFSBarrier, WallTime: time.Now().UnixNano(), Snapshot: &FSSnapshot{Key: skey, At: at}}
+	if err := m.append(ctx, barrier, true); err != nil {
+		return err
+	}
+	m.st.mu.Lock()
+	m.st.fsDirty = false
+	m.st.lastSnap = time.Now()
+	m.st.mu.Unlock()
+	return nil
 }
 
 // append serializes a write: renew the lease, CAS at the current cursor, record

@@ -57,10 +57,15 @@ func run(addr, dataDir string, log *slog.Logger) error {
 	sink := func(exec engine.ExecutionID, msg string) { log.Info("script.log", "exec", string(exec), "msg", msg) }
 	svc := platform.New(st, st.EventLog(leaser), leaser, pool, st.KV(), st.Inbox(), sink, platform.Config{})
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	if err := seed(ctx, st, log); err != nil {
 		return err
 	}
+
+	// The dispatcher resumes durably-suspended executions when their inbox gets a
+	// message or their wake deadline passes; it also recovers parked runs at boot.
+	go svc.RunDispatcher(ctx, 500*time.Millisecond, log)
 
 	sched := trigger.NewScheduler(st, svc, log)
 	if err := sched.Reload(ctx); err != nil {

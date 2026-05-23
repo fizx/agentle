@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +22,7 @@ import (
 type Config struct {
 	MaxSleep    time.Duration // cap on script sleep()
 	ShellMaxCPU time.Duration // cap on a single shell command
-	MaxRecvWait time.Duration // cap on a blocking recv()
+	Debounce    time.Duration // min interval between fs snapshot barriers (0 = engine default)
 }
 
 // Service is the integration hub for the control plane and triggers.
@@ -35,6 +36,9 @@ type Service struct {
 	Runner  engine.Runner
 	Cfg     Config
 	LogSink caps.LogSink
+
+	resumeMu sync.Mutex          // guards resuming
+	resuming map[string]struct{} // executions with a resume in flight (dedup)
 }
 
 // New builds a Service. log/leaser/pool/kv/inbox are injected so backends are swappable.
@@ -45,6 +49,7 @@ func New(st *store.Store, log engine.Log, leaser engine.Leaser, pool engine.Sand
 	return &Service{
 		Store: st, Log: log, Leaser: leaser, Pool: pool, KV: kv, Inbox: inbox,
 		Runner: &vm.Runner{}, Cfg: cfg, LogSink: sink,
+		resuming: make(map[string]struct{}),
 	}
 }
 
@@ -73,6 +78,20 @@ func (s *Service) SetStatus(ctx context.Context, exec engine.ExecutionID, status
 	return s.Store.SetExecutionStatus(ctx, string(exec), int(status), output, errMsg)
 }
 
+// Suspend implements engine.Resolver: it marks the execution suspended and records
+// the wake condition (a workspace inbox and/or a deadline). The dispatcher resumes
+// it when the condition is met.
+func (s *Service) Suspend(ctx context.Context, exec engine.ExecutionID, susp engine.Suspension) error {
+	if err := s.Store.SetExecutionStatus(ctx, string(exec), int(engine.StatusSuspended), nil, ""); err != nil {
+		return err
+	}
+	return s.Store.PutSuspension(ctx, store.Suspension{
+		Exec:      string(exec),
+		Workspace: susp.Workspace,
+		WakeAt:    susp.WakeAt,
+	})
+}
+
 // assembleEnv builds the capability environment: system caps always, granted
 // caps from resolved tool configs + secrets.
 func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scriptID, actorID string, grants []store.GrantRef) (engine.Environment, error) {
@@ -86,7 +105,7 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 		"kv":   caps.KV(s.KV, actorID), // namespaced by workspace, not script
 	}
 	if s.Inbox != nil {
-		env["inbox"] = caps.Inbox(s.Inbox, actorID, s.Cfg.MaxRecvWait, 0)
+		env["inbox"] = caps.Inbox(s.Inbox, actorID)
 	}
 	for _, g := range grants {
 		cfg, err := s.Store.GetToolConfig(ctx, g.ConfigID)
@@ -197,12 +216,18 @@ func (s *Service) RunExecution(ctx context.Context, req RunRequest) (*store.Exec
 		return nil, err
 	}
 
-	eng := &engine.Engine{Leaser: s.Leaser, Log: s.Log, Runner: s.Runner, Res: s}
-	if usesShell(v.Grants) && s.Pool != nil {
-		eng.Pool = s.Pool
-	}
-	if _, err := eng.Run(ctx, engine.ExecutionID(id)); err != nil {
+	if _, err := s.newEngine(v.Grants).Run(ctx, engine.ExecutionID(id)); err != nil {
 		return s.Store.GetExecution(ctx, id) // status already recorded as failed
 	}
 	return s.Store.GetExecution(ctx, id)
+}
+
+// newEngine builds an engine for a run with the given grants, attaching the
+// sandbox pool only when the shell capability is used.
+func (s *Service) newEngine(grants []store.GrantRef) *engine.Engine {
+	eng := &engine.Engine{Leaser: s.Leaser, Log: s.Log, Runner: s.Runner, Res: s, Debounce: s.Cfg.Debounce}
+	if usesShell(grants) && s.Pool != nil {
+		eng.Pool = s.Pool
+	}
+	return eng
 }

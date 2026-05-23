@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -84,6 +85,7 @@ func Catalog() []Builtin {
 const (
 	tlMediator = "agentle.mediator"
 	tlCtx      = "agentle.ctx"
+	tlSuspend  = "agentle.suspend" // holds an *engine.SuspendError when a call parked
 )
 
 func mediatorOf(t *starlark.Thread) engine.Mediator {
@@ -113,9 +115,22 @@ func callCap(t *starlark.Thread, capability, method string, args any, idempotent
 		MutatesFS:  mutatesFS,
 	})
 	if err != nil {
+		// A durable suspension unwinds the whole script. Stash the typed error so
+		// the runner can recover it from under Starlark's backtrace wrapping.
+		if errors.Is(err, engine.ErrSuspend) {
+			t.SetLocal(tlSuspend, err)
+		}
 		return nil, err
 	}
 	return unmarshalResult(res)
+}
+
+// suspendOf returns the suspension error stashed by callCap, or nil.
+func suspendOf(t *starlark.Thread) error {
+	if s, ok := t.Local(tlSuspend).(error); ok {
+		return s
+	}
+	return nil
 }
 
 func dictToStringMap(d *starlark.Dict) (map[string]string, error) {

@@ -173,13 +173,14 @@ func (s *snapSandbox) Snapshot(context.Context) (SnapshotKey, error) {
 	return SnapshotKey(fmt.Sprintf("snap-%d", n)), nil
 }
 
-func TestFSBarrierOnMutatingCall(t *testing.T) {
+// With debounce=0, an fs-mutating call snapshots immediately (strict per-RPC).
+func TestFSBarrierImmediateWhenDebounceZero(t *testing.T) {
 	ce := &countingExec{}
 	ls, log, env := newHarness(t, ce)
 	ctx := context.Background()
 	sb := &snapSandbox{}
 	lease, _ := ls.Acquire(ctx, "e1")
-	m := NewMediator("e1", log, lease, env, sb, nil)
+	m := NewMediator("e1", log, lease, env, sb, nil, WithDebounce(0))
 
 	i := inv("write", `1`)
 	i.Idempotent = false
@@ -195,6 +196,48 @@ func TestFSBarrierOnMutatingCall(t *testing.T) {
 	}
 	if atomic.LoadInt32(&sb.snaps) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", sb.snaps)
+	}
+}
+
+// With a debounce window, fs-mutating calls within the window do NOT snapshot;
+// FlushFS at teardown records exactly one barrier for all of them.
+func TestFSBarrierDebouncedUntilFlush(t *testing.T) {
+	ce := &countingExec{}
+	ls, log, env := newHarness(t, ce)
+	ctx := context.Background()
+	sb := &snapSandbox{}
+	lease, _ := ls.Acquire(ctx, "e1")
+	m := NewMediator("e1", log, lease, env, sb, nil) // default 60s debounce
+
+	for n := 0; n < 3; n++ {
+		i := inv("write", `1`)
+		i.Idempotent = false
+		i.MutatesFS = true
+		mustCall(t, m, i)
+	}
+	// No barrier yet — all three mutations are within the debounce window.
+	if atomic.LoadInt32(&sb.snaps) != 0 {
+		t.Fatalf("expected 0 snapshots before flush, got %d", sb.snaps)
+	}
+	events, _ := log.Read(ctx, "e1", 0)
+	for _, ev := range events {
+		if ev.Kind == EventFSBarrier {
+			t.Fatal("did not expect a barrier before flush")
+		}
+	}
+	// Teardown flush records a single barrier capturing the latest state.
+	if err := m.FlushFS(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&sb.snaps) != 1 {
+		t.Fatalf("expected exactly 1 snapshot after flush, got %d", sb.snaps)
+	}
+	// A second flush is a no-op (nothing dirty).
+	if err := m.FlushFS(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if atomic.LoadInt32(&sb.snaps) != 1 {
+		t.Fatalf("flush when clean should be a no-op, got %d snapshots", sb.snaps)
 	}
 }
 

@@ -1,0 +1,1 @@
+- If tools/capabilities expect secrets, make sure those keys are populated on the secrets page(s).  while secrets are write-only, existance or need of the keys should be obvious

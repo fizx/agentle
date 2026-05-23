@@ -274,6 +274,13 @@ CREATE TABLE IF NOT EXISTS inbox (
   created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_inbox_ws ON inbox(workspace, consumed_by, id);
+CREATE TABLE IF NOT EXISTS suspensions (
+  exec TEXT PRIMARY KEY,
+  workspace TEXT NOT NULL DEFAULT '',
+  wake_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_susp_ws ON suspensions(workspace);
 `
 
 func now() int64 { return time.Now().UnixNano() }

@@ -115,4 +115,29 @@ var (
 	// ErrNonDeterministic means a replayed call did not match the recorded event:
 	// the script is nondeterministic or drifted from its pinned version.
 	ErrNonDeterministic = errors.New("engine: nondeterministic replay")
+	// ErrSuspend marks a run that yielded at a durable suspension point — e.g.
+	// recv() with no message waiting. It is NOT a failure: the engine parks the
+	// execution (StatusSuspended) and resumes it by replaying the log once its
+	// wake condition is met. A capability signals it by returning a *SuspendError.
+	ErrSuspend = errors.New("engine: execution suspended")
 )
+
+// Suspension describes why a run parked and what should wake it. Workspace names
+// an inbox whose next message resumes the run; WakeAt (unix nanos, 0 = none) is a
+// durable timer deadline. Either or both may be set; the resumer wakes the run
+// when a message is available OR the deadline passes, whichever comes first.
+type Suspension struct {
+	Workspace string `json:"workspace"`
+	WakeAt    int64  `json:"wake_at"`
+}
+
+// SuspendError is returned by a capability Executor to park the execution at a
+// durable suspension point. The Mediator records no result for the call, so on
+// resume the call re-executes and either makes progress or suspends again.
+type SuspendError struct{ Suspension }
+
+func (e *SuspendError) Error() string { return "engine: suspended awaiting " + e.Workspace }
+
+// Is reports SuspendError as an instance of ErrSuspend so errors.Is works through
+// wrapping (e.g. the Starlark backtrace).
+func (e *SuspendError) Is(target error) bool { return target == ErrSuspend }
