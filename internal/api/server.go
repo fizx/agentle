@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/kylemaxwell/agentle/internal/examples"
+	"github.com/kylemaxwell/agentle/internal/mcp"
 	"github.com/kylemaxwell/agentle/internal/platform"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/kylemaxwell/agentle/internal/trigger"
@@ -81,6 +82,11 @@ func (s *Server) Handler() http.Handler {
 
 		r.Post("/hooks/{token}", s.webhook)
 	})
+
+	// A minimal demo MCP server (JSON-RPC over HTTP). Lets the platform dogfood the
+	// MCP capability against a real peer: point an "mcp" tool config's endpoint at
+	// /mcp (the zero-config default is an in-process mock with the same tools).
+	r.Handle("/mcp", mcp.NewDemo())
 
 	if s.static != nil {
 		s.mountStatic(r)

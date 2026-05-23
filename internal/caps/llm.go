@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +25,14 @@ type LLMConfig struct {
 }
 
 // LLM returns the "llm" capability executor (OpenAI chat-completions format).
+//
+// Tool use: when the script passes tools= (OpenAI function specs, or MCP tool
+// definitions which are normalized automatically), the model may respond with
+// tool_calls. They are returned in a Starlark-friendly shape — a list of
+// {id, name, arguments} with arguments decoded to a dict — so the script can
+// execute each (e.g. via mcp_call) and append a {"role":"tool", ...} message
+// before calling llm again. The capability translates this shape to/from the
+// wire format, so it stays compatible with real OpenAI-style servers.
 func LLM(cfg LLMConfig) engine.Executor {
 	if cfg.Timeout == 0 {
 		cfg.Timeout = 120 * time.Second
@@ -37,22 +46,28 @@ func LLM(cfg LLMConfig) engine.Executor {
 			Messages    []map[string]any `json:"messages"`
 			Model       string           `json:"model"`
 			Temperature float64          `json:"temperature"`
+			Tools       []map[string]any `json:"tools"`
 		}
 		if err := json.Unmarshal(inv.Args, &a); err != nil {
 			return nil, err
 		}
+		tools := normalizeTools(a.Tools)
 		if mock {
-			return mockChat(a.Messages)
+			return mockChat(a.Messages, tools)
 		}
 		model := a.Model
 		if model == "" {
 			model = cfg.Model
 		}
-		reqBody, _ := json.Marshal(map[string]any{
+		body := map[string]any{
 			"model":       model,
-			"messages":    a.Messages,
+			"messages":    toWireMessages(a.Messages),
 			"temperature": a.Temperature,
-		})
+		}
+		if len(tools) > 0 {
+			body["tools"] = tools
+		}
+		reqBody, _ := json.Marshal(body)
 		url := strings.TrimRight(cfg.BaseURL, "/") + "/chat/completions"
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
 		if err != nil {
@@ -73,8 +88,15 @@ func LLM(cfg LLMConfig) engine.Executor {
 		var parsed struct {
 			Choices []struct {
 				Message struct {
-					Role    string `json:"role"`
-					Content string `json:"content"`
+					Role      string `json:"role"`
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						ID       string `json:"id"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
 				} `json:"message"`
 			} `json:"choices"`
 			Usage map[string]any `json:"usage"`
@@ -85,30 +107,183 @@ func LLM(cfg LLMConfig) engine.Executor {
 		if len(parsed.Choices) == 0 {
 			return nil, fmt.Errorf("llm: empty response")
 		}
-		return json.Marshal(map[string]any{
-			"role":    parsed.Choices[0].Message.Role,
-			"content": parsed.Choices[0].Message.Content,
-			"usage":   parsed.Usage,
-		})
+		msg := parsed.Choices[0].Message
+		out := map[string]any{"role": msg.Role, "content": msg.Content, "usage": parsed.Usage}
+		if len(msg.ToolCalls) > 0 {
+			calls := make([]map[string]any, 0, len(msg.ToolCalls))
+			for _, tc := range msg.ToolCalls {
+				var args map[string]any
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				if args == nil {
+					args = map[string]any{}
+				}
+				calls = append(calls, map[string]any{"id": tc.ID, "name": tc.Function.Name, "arguments": args})
+			}
+			out["tool_calls"] = calls
+		}
+		return json.Marshal(out)
 	})
 }
 
-func mockChat(messages []map[string]any) (json.RawMessage, error) {
-	var last string
-	for _, m := range messages {
-		if c, ok := m["content"].(string); ok {
-			last = c
+// normalizeTools accepts either OpenAI function specs ({type:"function",...}) or
+// MCP tool definitions ({name, description, inputSchema}) and returns OpenAI
+// function specs.
+func normalizeTools(tools []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(tools))
+	for _, t := range tools {
+		if t["type"] == "function" {
+			out = append(out, t)
+			continue
 		}
+		name, _ := t["name"].(string)
+		if name == "" {
+			continue
+		}
+		fn := map[string]any{"name": name}
+		if d, ok := t["description"]; ok {
+			fn["description"] = d
+		}
+		if s, ok := t["inputSchema"]; ok {
+			fn["parameters"] = s
+		} else {
+			fn["parameters"] = map[string]any{"type": "object", "properties": map[string]any{}}
+		}
+		out = append(out, map[string]any{"type": "function", "function": fn})
 	}
-	content := "[mock] " + truncate(last, 200)
-	if last == "" {
+	return out
+}
+
+// toWireMessages translates the script's Starlark-friendly assistant tool_calls
+// ([{id,name,arguments-dict}]) back into OpenAI wire form (arguments as a JSON
+// string). Other messages pass through unchanged.
+func toWireMessages(messages []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		raw, ok := m["tool_calls"]
+		if !ok || raw == nil {
+			out = append(out, m)
+			continue
+		}
+		list, ok := raw.([]any)
+		if !ok {
+			out = append(out, m)
+			continue
+		}
+		wire := make([]map[string]any, 0, len(list))
+		for _, c := range list {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			argStr := "{}"
+			if b, err := json.Marshal(cm["arguments"]); err == nil {
+				argStr = string(b)
+			}
+			wire = append(wire, map[string]any{
+				"id":   cm["id"],
+				"type": "function",
+				"function": map[string]any{
+					"name":      cm["name"],
+					"arguments": argStr,
+				},
+			})
+		}
+		nm := map[string]any{}
+		for k, v := range m {
+			nm[k] = v
+		}
+		nm["tool_calls"] = wire
+		out = append(out, nm)
+	}
+	return out
+}
+
+var intRe = regexp.MustCompile(`-?\d+(?:\.\d+)?`)
+
+// mockChat is the offline provider. With tools present it demonstrates a full
+// tool-use loop deterministically: it requests the first tool (filling arguments
+// from the user's text by a small heuristic), then, once it sees the tool result,
+// returns a final answer echoing it.
+func mockChat(messages []map[string]any, tools []map[string]any) (json.RawMessage, error) {
+	lastRole, lastContent, lastUser := scanMessages(messages)
+
+	if len(tools) > 0 && lastRole != "tool" {
+		name := pickTool(tools, lastUser)
+		return json.Marshal(map[string]any{
+			"role":    "assistant",
+			"content": "",
+			"usage":   map[string]any{"mock": true},
+			"tool_calls": []map[string]any{
+				{"id": "call_1", "name": name, "arguments": guessArgs(name, lastUser)},
+			},
+		})
+	}
+	if lastRole == "tool" {
+		return json.Marshal(map[string]any{
+			"role":    "assistant",
+			"content": "[mock] result: " + lastContent,
+			"usage":   map[string]any{"mock": true},
+		})
+	}
+	content := "[mock] " + truncate(lastUser, 200)
+	if lastUser == "" {
 		content = "[mock] (no user content)"
 	}
-	return json.Marshal(map[string]any{
-		"role":    "assistant",
-		"content": content,
-		"usage":   map[string]any{"mock": true},
-	})
+	return json.Marshal(map[string]any{"role": "assistant", "content": content, "usage": map[string]any{"mock": true}})
+}
+
+// scanMessages returns the last message's role and content, plus the last user
+// message content (for the mock heuristic).
+func scanMessages(messages []map[string]any) (lastRole, lastContent, lastUser string) {
+	for _, m := range messages {
+		role, _ := m["role"].(string)
+		content, _ := m["content"].(string)
+		lastRole, lastContent = role, content
+		if role == "user" {
+			lastUser = content
+		}
+	}
+	return
+}
+
+// pickTool chooses which tool the offline mock "decides" to call: a tool whose
+// name is mentioned in the user's text, else the first one.
+func pickTool(tools []map[string]any, userText string) string {
+	lower := strings.ToLower(userText)
+	first := ""
+	for _, t := range tools {
+		fn, _ := t["function"].(map[string]any)
+		name, _ := fn["name"].(string)
+		if name == "" {
+			continue
+		}
+		if first == "" {
+			first = name
+		}
+		if strings.Contains(lower, strings.ToLower(name)) {
+			return name
+		}
+	}
+	return first
+}
+
+// guessArgs fills tool arguments for the offline mock from the user's text: the
+// "add" tool gets the first two numbers; text tools get the message.
+func guessArgs(name, userText string) map[string]any {
+	switch name {
+	case "add":
+		nums := intRe.FindAllString(userText, 2)
+		a, b := 0.0, 0.0
+		if len(nums) > 0 {
+			fmt.Sscanf(nums[0], "%g", &a)
+		}
+		if len(nums) > 1 {
+			fmt.Sscanf(nums[1], "%g", &b)
+		}
+		return map[string]any{"a": a, "b": b}
+	default:
+		return map[string]any{"text": userText}
+	}
 }
 
 func truncate(s string, n int) string {

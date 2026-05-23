@@ -37,6 +37,7 @@ func catalog() []Builtin {
 	all = append(all, groupSystem...)
 	all = append(all, groupKV...)
 	all = append(all, groupNet...)
+	all = append(all, groupMCP...)
 	all = append(all, groupActor...)
 	all = append(all, groupConcurrency...)
 	all = append(all, groupShell...)

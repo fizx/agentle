@@ -36,6 +36,12 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 	if err := st.PutToolConfig(ctx, store.ToolConfig{ID: "shell-local", Capability: "shell", Config: json.RawMessage(`{}`)}); err != nil {
 		return err
 	}
+	// A demo MCP server config. Empty endpoint => in-process mock (echo/add/upper),
+	// so the MCP examples are playable offline; set "endpoint" to a real MCP server
+	// (e.g. this instance's own /mcp) to use the live JSON-RPC path.
+	if err := st.PutToolConfig(ctx, store.ToolConfig{ID: "mcp-demo", Capability: "mcp", Config: json.RawMessage(`{}`)}); err != nil {
+		return err
+	}
 
 	llmGrant := "llm-mock"
 	// If an API key is present in the environment, wire a real OpenAI-compatible config.

@@ -7,7 +7,7 @@ import "go.starlark.net/starlark"
 var groupNet = []Builtin{
 	{Name: "http_get", Group: "net", Doc: "http_get(url, headers={}) -> {status,body,headers}", Fn: bHTTPGet},
 	{Name: "http_post", Group: "net", Doc: "http_post(url, body='', headers={}) -> {status,body,headers}", Fn: bHTTPPost},
-	{Name: "llm", Group: "net", Doc: "llm(messages, model='', temperature=0) -> {role,content}", Fn: bLLM},
+	{Name: "llm", Group: "net", Doc: "llm(messages, model='', temperature=0, tools=[]) -> {role,content,tool_calls}", Fn: bLLM},
 }
 
 func bHTTPGet(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -40,12 +40,21 @@ func bLLM(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs [
 	var messages starlark.Value
 	var model string
 	var temperature float64
-	if err := starlark.UnpackArgs("llm", args, kwargs, "messages", &messages, "model?", &model, "temperature?", &temperature); err != nil {
+	var tools starlark.Value
+	if err := starlark.UnpackArgs("llm", args, kwargs, "messages", &messages, "model?", &model, "temperature?", &temperature, "tools?", &tools); err != nil {
 		return nil, err
 	}
 	msgs, err := starlarkToGo(messages)
 	if err != nil {
 		return nil, err
 	}
-	return callCap(t, "llm", "chat", map[string]any{"messages": msgs, "model": model, "temperature": temperature}, true, false)
+	payload := map[string]any{"messages": msgs, "model": model, "temperature": temperature}
+	if tools != nil && tools != starlark.None {
+		tv, err := starlarkToGo(tools)
+		if err != nil {
+			return nil, err
+		}
+		payload["tools"] = tv
+	}
+	return callCap(t, "llm", "chat", payload, true, false)
 }

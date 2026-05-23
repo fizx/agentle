@@ -165,6 +165,12 @@ func buildExecutor(capability string, cfg *store.ToolConfig, secret string) (eng
 		}
 		_ = json.Unmarshal(cfg.Config, &c)
 		return caps.LLM(caps.LLMConfig{BaseURL: c.BaseURL, APIKey: secret, Model: c.Model}), nil
+	case "mcp":
+		var c struct {
+			Endpoint string `json:"endpoint"`
+		}
+		_ = json.Unmarshal(cfg.Config, &c)
+		return caps.MCP(caps.MCPConfig{Endpoint: c.Endpoint, APIKey: secret}), nil
 	case "shell":
 		// Provisioned as a sandbox by the engine; no Environment executor.
 		return nil, nil
