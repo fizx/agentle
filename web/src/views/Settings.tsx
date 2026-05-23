@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
-import type { ToolConfig } from '../types'
+import type { ApiToken, ToolConfig } from '../types'
 
 const CONFIG_TEMPLATES: Record<string, string> = {
   llm: '{\n  "base_url": "",\n  "model": "gpt-4o-mini"\n}',
   http: '{\n  "allow": ["api.github.com", "*.example.com"],\n  "auth_header": "Authorization"\n}',
+  mcp: '{\n  "endpoint": ""\n}',
   shell: '{}',
 }
 
@@ -78,6 +79,7 @@ export default function Settings() {
               <select value={cCap} onChange={(e) => onCapChange(e.target.value)} style={{ width: '100%' }}>
                 <option value="llm">llm</option>
                 <option value="http">http</option>
+                <option value="mcp">mcp</option>
                 <option value="shell">shell</option>
               </select>
             </div>
@@ -103,8 +105,70 @@ export default function Settings() {
         </table>
       </div>
 
+      <ApiTokens toast={toast} />
+
       <div className="muted" style={{ fontSize: 12 }}>Triggers are managed per-script on the Scripts page.</div>
       {msg && <div className="toast">{msg}</div>}
+    </div>
+  )
+}
+
+// ApiTokens manages bearer tokens for the programmatic REST API (/v1). A new
+// token's secret is shown once, here, and never again.
+function ApiTokens({ toast }: { toast: (m: string) => void }) {
+  const [tokens, setTokens] = useState<ApiToken[]>([])
+  const [name, setName] = useState('')
+  const [fresh, setFresh] = useState<ApiToken | null>(null)
+  const refresh = useCallback(async () => { setTokens((await api.listTokens()) || []) }, [])
+  useEffect(() => { refresh() }, [refresh])
+
+  const create = async () => {
+    try {
+      const tok = await api.createToken(name || 'token')
+      setFresh(tok); setName(''); refresh()
+    } catch (e) { toast((e as Error).message) }
+  }
+  const del = async (id: string) => { await api.deleteToken(id); if (fresh?.id === id) setFresh(null); refresh() }
+
+  return (
+    <div className="card">
+      <h2>API tokens</h2>
+      <div className="muted" style={{ marginBottom: 8 }}>
+        Bearer tokens for the programmatic REST API (<span className="mono">/v1</span>). A token carries
+        your role; use it as <span className="mono">Authorization: Bearer &lt;token&gt;</span>. The secret is shown once.
+      </div>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <input placeholder="token name (e.g. ci)" value={name} onChange={(e) => setName(e.target.value)} />
+        <button onClick={create}>Create token</button>
+      </div>
+      {fresh?.token && (
+        <div className="card" style={{ marginBottom: 10 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Copy this now — it won't be shown again:</div>
+          <code className="mono" style={{ cursor: 'pointer', wordBreak: 'break-all' }}
+            title="copy" onClick={() => { navigator.clipboard?.writeText(fresh.token || ''); toast('token copied') }}>
+            {fresh.token}
+          </code>
+          <pre className="muted" style={{ fontSize: 11, marginTop: 8, whiteSpace: 'pre-wrap' }}>
+{`curl -s -X POST $ORIGIN/v1/scripts/<id>/runs \\
+  -H "Authorization: Bearer ${fresh.token}" \\
+  -d '{"input": {"name": "kyle"}}'`}
+          </pre>
+        </div>
+      )}
+      <table>
+        <thead><tr><th>name</th><th>id</th><th>last used</th><th /></tr></thead>
+        <tbody>
+          {tokens.map((t) => (
+            <tr key={t.id}>
+              <td>{t.name || '—'}</td>
+              <td className="mono muted">{t.id.slice(0, 12)}</td>
+              <td className="muted">{t.last_used_at ? new Date(t.last_used_at / 1e6).toLocaleString() : 'never'}</td>
+              <td><button onClick={() => del(t.id)}>revoke</button></td>
+            </tr>
+          ))}
+          {tokens.length === 0 && <tr><td colSpan={4} className="muted">no tokens</td></tr>}
+        </tbody>
+      </table>
     </div>
   )
 }

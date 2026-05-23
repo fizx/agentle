@@ -151,6 +151,18 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
                       <h3>Result <StatusBadge status={result.status} /></h3>
                       <a onClick={() => onOpenRun(result.id)}>view trace →</a>
                     </div>
+                    <div className="row spread" style={{ marginBottom: 6 }}>
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        execution <span className="mono" title="copy" style={{ cursor: 'pointer' }}
+                          onClick={() => navigator.clipboard?.writeText(result.id)}>{result.id}</span>
+                        <span className="mono" style={{ marginLeft: 8 }}>workspace {result.workspace}</span>
+                      </span>
+                    </div>
+                    {result.status === 3 && (
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                        Suspended at a recv() — it resumes automatically when a message arrives or its timeout fires.
+                      </div>
+                    )}
                     {result.error && <pre className="err">{result.error}</pre>}
                     {result.output !== undefined && <Json value={result.output} />}
                   </div>

@@ -90,6 +90,15 @@ export interface Capability {
   doc: string
 }
 
+export interface ApiToken {
+  id: string
+  name: string
+  user_id: string
+  created_at: number
+  last_used_at: number
+  token?: string // plaintext, returned only at creation
+}
+
 export interface Example {
   id: string
   title: string

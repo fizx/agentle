@@ -1,5 +1,5 @@
 import type {
-  Capability, Example, Execution, Script, ScriptDetail, ToolConfig, Trace, Trigger, User, Version,
+  ApiToken, Capability, Example, Execution, Script, ScriptDetail, ToolConfig, Trace, Trigger, User, Version,
 } from './types'
 
 const USER_KEY = 'agentle.user'
@@ -67,6 +67,10 @@ export const api = {
   listTriggers: (script?: string) => req<Trigger[]>('GET', '/triggers' + qs({ script })),
   putTrigger: (t: Partial<Trigger>) => req<Trigger>('PUT', '/triggers', t),
   deleteTrigger: (id: string) => req<void>('DELETE', `/triggers/${id}`),
+
+  listTokens: () => req<ApiToken[]>('GET', '/tokens'),
+  createToken: (name: string) => req<ApiToken>('POST', '/tokens', { name }),
+  deleteToken: (id: string) => req<void>('DELETE', `/tokens/${id}`),
 }
 
 export interface GrantRefInput {
