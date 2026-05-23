@@ -52,7 +52,7 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 		log.Info("configured live llm from OPENAI_API_KEY", "model", model)
 	}
 
-	scripts, err := st.ListScripts(ctx, 1, 0)
+	scripts, err := st.ListScripts(ctx, "", 1, 0)
 	if err != nil {
 		return err
 	}

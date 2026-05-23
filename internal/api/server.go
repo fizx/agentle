@@ -122,7 +122,12 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	if err := s.svc.Store.DeleteUser(r.Context(), chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	if id == currentUser(r.Context()).ID {
+		httpError(w, http.StatusBadRequest, "cannot delete yourself")
+		return
+	}
+	if err := s.svc.Store.DeleteUser(r.Context(), id); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -133,8 +138,18 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listScripts(w http.ResponseWriter, r *http.Request) {
 	limit, offset := pagination(r)
-	scripts, err := s.svc.Store.ListScripts(r.Context(), limit, offset)
+	scripts, err := s.svc.Store.ListScripts(r.Context(), visibilityOwner(r), limit, offset)
 	writeOrErr(w, scripts, err)
+}
+
+// visibilityOwner returns "" for admins (see everything) or the current user's
+// id for regular users (see only their own scripts/runs).
+func visibilityOwner(r *http.Request) string {
+	u := currentUser(r.Context())
+	if u.Role == store.RoleAdmin {
+		return ""
+	}
+	return u.ID
 }
 
 func (s *Server) createScript(w http.ResponseWriter, r *http.Request) {
@@ -171,6 +186,9 @@ type scriptDetail struct {
 
 func (s *Server) getScript(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if !s.canEditScript(w, r, id) {
+		return
+	}
 	sc, err := s.svc.Store.GetScript(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
 		httpError(w, http.StatusNotFound, "script not found")
@@ -189,7 +207,11 @@ func (s *Server) getScript(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listVersions(w http.ResponseWriter, r *http.Request) {
-	versions, err := s.svc.Store.ListVersions(r.Context(), chi.URLParam(r, "id"))
+	id := chi.URLParam(r, "id")
+	if !s.canEditScript(w, r, id) {
+		return
+	}
+	versions, err := s.svc.Store.ListVersions(r.Context(), id)
 	writeOrErr(w, versions, err)
 }
 
@@ -258,6 +280,9 @@ func (s *Server) runScript(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &body) {
 		return
 	}
+	if !s.canEditScript(w, r, chi.URLParam(r, "id")) {
+		return
+	}
 	if len(body.Input) == 0 {
 		body.Input = json.RawMessage("null")
 	}
@@ -278,22 +303,48 @@ func (s *Server) runScript(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listExecutions(w http.ResponseWriter, r *http.Request) {
 	limit, offset := pagination(r)
-	list, err := s.svc.Store.ListExecutions(r.Context(), r.URL.Query().Get("script"), limit, offset)
+	list, err := s.svc.Store.ListExecutions(r.Context(), r.URL.Query().Get("script"), visibilityOwner(r), limit, offset)
 	writeOrErr(w, list, err)
 }
 
 func (s *Server) getExecution(w http.ResponseWriter, r *http.Request) {
-	exe, err := s.svc.Store.GetExecution(r.Context(), chi.URLParam(r, "id"))
-	if errors.Is(err, store.ErrNotFound) {
-		httpError(w, http.StatusNotFound, "execution not found")
+	exe := s.execIfVisible(w, r, chi.URLParam(r, "id"))
+	if exe == nil {
 		return
 	}
-	writeOrErr(w, exe, err)
+	writeJSON(w, http.StatusOK, exe)
 }
 
 func (s *Server) getTrace(w http.ResponseWriter, r *http.Request) {
-	tr, err := s.svc.GetTrace(r.Context(), chi.URLParam(r, "id"))
+	id := chi.URLParam(r, "id")
+	if s.execIfVisible(w, r, id) == nil {
+		return
+	}
+	tr, err := s.svc.GetTrace(r.Context(), id)
 	writeOrErr(w, tr, err)
+}
+
+// execIfVisible loads an execution and enforces that the caller may see it
+// (admin, or owner of its script). Writes an error and returns nil otherwise.
+func (s *Server) execIfVisible(w http.ResponseWriter, r *http.Request, id string) *store.Execution {
+	exe, err := s.svc.Store.GetExecution(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "execution not found")
+		return nil
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return nil
+	}
+	u := currentUser(r.Context())
+	if u.Role != store.RoleAdmin {
+		sc, err := s.svc.Store.GetScript(r.Context(), exe.ScriptID)
+		if err != nil || sc.Owner != u.ID {
+			httpError(w, http.StatusForbidden, "not your execution")
+			return nil
+		}
+	}
+	return exe
 }
 
 // --- configs & secrets -----------------------------------------------------

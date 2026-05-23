@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -93,6 +94,44 @@ func TestSecretScopePrecedence(t *testing.T) {
 	}
 }
 
+func TestSecretsScopeMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+
+	// Simulate a pre-round-1 database: secrets keyed on name only, no scope.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE secrets (name TEXT PRIMARY KEY, value TEXT NOT NULL, created_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`INSERT INTO secrets(name,value,created_at) VALUES('LEGACY','v1',1)`); err != nil {
+		t.Fatal(err)
+	}
+	raw.Close()
+
+	// Open via the store: migration must add scope and preserve the row as global.
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("open/migrate failed: %v", err)
+	}
+	defer s.Close()
+
+	v, err := s.ResolveSecret(ctx, "LEGACY", "any")
+	if err != nil || v != "v1" {
+		t.Fatalf("legacy secret lost: v=%q err=%v", v, err)
+	}
+	// The previously-failing scoped write must now work.
+	if err := s.PutSecret(ctx, "NEW", ScriptScope("s1"), "v2"); err != nil {
+		t.Fatalf("scoped put after migration: %v", err)
+	}
+	names, _ := s.ListSecretNames(ctx, ScopeGlobal)
+	if len(names) != 1 || names[0] != "LEGACY" {
+		t.Fatalf("global names = %v", names)
+	}
+}
+
 func TestUsersCRUD(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -173,8 +212,8 @@ func TestScriptPagination(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		_, _ = s.CreateScript(ctx, "s"+string(rune('a'+i)), "name"+string(rune('a'+i)), "u1")
 	}
-	p1, _ := s.ListScripts(ctx, 2, 0)
-	p2, _ := s.ListScripts(ctx, 2, 2)
+	p1, _ := s.ListScripts(ctx, "", 2, 0)
+	p2, _ := s.ListScripts(ctx, "", 2, 2)
 	if len(p1) != 2 || len(p2) != 2 {
 		t.Fatalf("pagination sizes: %d %d", len(p1), len(p2))
 	}
@@ -230,7 +269,7 @@ func TestExecutionLifecycle(t *testing.T) {
 	if got.Status != int(engine.StatusCompleted) || string(got.Output) != `{"ok":true}` {
 		t.Fatalf("execution = %+v", got)
 	}
-	list, _ := s.ListExecutions(ctx, "s1", 10, 0)
+	list, _ := s.ListExecutions(ctx, "s1", "", 10, 0)
 	if len(list) != 1 {
 		t.Fatalf("list = %d", len(list))
 	}

@@ -7,13 +7,14 @@ import (
 )
 
 // buildEnvelope constructs the structured event delivered to a script's main()
-// and resolves the actor id (the kv namespace) for the run.
+// and resolves the workspace id (the kv namespace) for the run.
 //
 // Shape: {...metadata, "data": <input>} — metadata is spread at the top level so
 // templates can reference it, e.g. {{event.id}} or {{event.data.user}}.
 //
-// Actor: a trigger's ActorTemplate binds runs to a named actor (shared state);
-// without one, the actor is unique per execution (anonymous — no shared kv).
+// Workspace: a trigger's ActorTemplate binds runs to a named workspace (shared
+// state); without one, the workspace is unique per execution (anonymous — no
+// shared kv). "workspace" is the user-facing term for an actor instance.
 func buildEnvelope(execID string, req RunRequest) (map[string]any, string) {
 	kind := req.Kind
 	if kind == "" {
@@ -34,12 +35,12 @@ func buildEnvelope(execID string, req RunRequest) (map[string]any, string) {
 		"data":       data,
 	}
 
-	actorID := "exec:" + execID // anonymous: unique per run
+	workspace := "run:" + execID // anonymous: unique per run
 	if req.ActorTemplate != "" {
-		actorID = "actor:" + interpolate(req.ActorTemplate, env)
+		workspace = interpolate(req.ActorTemplate, env) // named: shared, verbatim
 	}
-	env["actor"] = actorID
-	return env, actorID
+	env["workspace"] = workspace
+	return env, workspace
 }
 
 func triggerLabel(req RunRequest) string {

@@ -7,11 +7,11 @@ import (
 )
 
 func TestBuildEnvelopeAnonymousActor(t *testing.T) {
-	env, actor := buildEnvelope("ex_123", RunRequest{Kind: "dashboard", Data: json.RawMessage(`{"name":"kyle"}`)})
-	if actor != "exec:ex_123" {
-		t.Fatalf("anonymous actor = %q", actor)
+	env, ws := buildEnvelope("ex_123", RunRequest{Kind: "dashboard", Data: json.RawMessage(`{"name":"kyle"}`)})
+	if ws != "run:ex_123" {
+		t.Fatalf("anonymous workspace = %q", ws)
 	}
-	if env["kind"] != "dashboard" || env["id"] != "ex_123" || env["actor"] != "exec:ex_123" {
+	if env["kind"] != "dashboard" || env["id"] != "ex_123" || env["workspace"] != "run:ex_123" {
 		t.Fatalf("envelope = %+v", env)
 	}
 	data, _ := env["data"].(map[string]any)
@@ -21,14 +21,14 @@ func TestBuildEnvelopeAnonymousActor(t *testing.T) {
 }
 
 func TestBuildEnvelopeNamedActorTemplate(t *testing.T) {
-	env, actor := buildEnvelope("ex_9", RunRequest{
+	env, ws := buildEnvelope("ex_9", RunRequest{
 		Kind:          "webhook",
 		ActorTemplate: "webhook-{{event.id}}",
 		EventID:       "evt-42",
 		Data:          json.RawMessage(`{"x":1}`),
 	})
-	if actor != "actor:webhook-evt-42" {
-		t.Fatalf("named actor = %q", actor)
+	if ws != "webhook-evt-42" {
+		t.Fatalf("named workspace = %q", ws)
 	}
 	if env["id"] != "evt-42" {
 		t.Fatalf("event id = %v", env["id"])
@@ -82,7 +82,7 @@ def main(input):
 	if string(n1.Output) != "0" || string(n2.Output) != "1" {
 		t.Fatalf("named actor did not share kv: n1=%s n2=%s", n1.Output, n2.Output)
 	}
-	if n1.ActorID != "actor:fixed" {
-		t.Fatalf("actor id = %q", n1.ActorID)
+	if n1.ActorID != "fixed" {
+		t.Fatalf("workspace id = %q", n1.ActorID)
 	}
 }

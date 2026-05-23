@@ -31,15 +31,14 @@ func (s *Server) resolveUser(r *http.Request) *store.User {
 			return u
 		}
 	}
-	// Default to the first admin so a fresh dev setup is usable.
+	// No (or unknown) identity: treat as a dev admin so the instance can be
+	// bootstrapped. Prefer attributing actions to a real admin if one exists;
+	// never downgrade to a non-admin (that would lock out admin operations).
 	users, _ := s.svc.Store.ListUsers(r.Context())
 	for i := range users {
 		if users[i].Role == store.RoleAdmin {
 			return &users[i]
 		}
-	}
-	if len(users) > 0 {
-		return &users[0]
 	}
 	return &store.User{ID: "dev", Name: "dev", Role: store.RoleAdmin}
 }

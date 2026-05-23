@@ -1,0 +1,2 @@
+- add a restful API
+- add an MCP implementation and examples (both direct call and llm tool usage)

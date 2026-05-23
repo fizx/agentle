@@ -77,7 +77,7 @@ type Execution struct {
 	ID        string          `json:"id"`
 	ScriptID  string          `json:"script_id"`
 	Version   uint64          `json:"version"`
-	ActorID   string          `json:"actor_id"`
+	ActorID   string          `json:"workspace"` // user-facing term for the actor instance
 	Status    int             `json:"status"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
@@ -142,7 +142,56 @@ func (s *Store) migrate() error {
 			return err
 		}
 	}
-	return nil
+	return s.migrateSecretsScope()
+}
+
+// migrateSecretsScope upgrades a pre-round-1 secrets table (PRIMARY KEY(name))
+// to the scoped schema (PRIMARY KEY(name, scope)). A plain ADD COLUMN is not
+// enough because the conflict target changed; we rebuild and backfill scope.
+func (s *Store) migrateSecretsScope() error {
+	rows, err := s.db.Query(`PRAGMA table_info(secrets)`)
+	if err != nil {
+		return err
+	}
+	hasScope := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		if name == "scope" {
+			hasScope = true
+		}
+	}
+	rows.Close()
+	if hasScope {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, stmt := range []string{
+		`ALTER TABLE secrets RENAME TO secrets_old`,
+		`CREATE TABLE secrets (
+           name TEXT NOT NULL,
+           scope TEXT NOT NULL DEFAULT 'global',
+           value TEXT NOT NULL,
+           created_at INTEGER NOT NULL,
+           PRIMARY KEY (name, scope))`,
+		`INSERT INTO secrets(name, scope, value, created_at) SELECT name, 'global', value, created_at FROM secrets_old`,
+		`DROP TABLE secrets_old`,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 const schema = `
@@ -243,9 +292,19 @@ func (s *Store) GetScript(ctx context.Context, id string) (*Script, error) {
 	return &sc, err
 }
 
-func (s *Store) ListScripts(ctx context.Context, limit, offset int) ([]Script, error) {
+// ListScripts returns scripts ordered by name. If owner is non-empty, only that
+// owner's scripts are returned (RBAC visibility); empty owner returns all.
+func (s *Store) ListScripts(ctx context.Context, owner string, limit, offset int) ([]Script, error) {
 	limit, offset = page(limit, offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,owner,current_version,created_at FROM scripts ORDER BY name LIMIT ? OFFSET ?`, limit, offset)
+	q := `SELECT id,name,owner,current_version,created_at FROM scripts`
+	args := []any{}
+	if owner != "" {
+		q += ` WHERE owner=?`
+		args = append(args, owner)
+	}
+	q += ` ORDER BY name LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -510,13 +569,23 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*Execution, error)
 	return &e, nil
 }
 
-func (s *Store) ListExecutions(ctx context.Context, scriptID string, limit, offset int) ([]Execution, error) {
+// ListExecutions returns executions newest-first. scriptID filters to one script;
+// owner (non-empty) restricts to executions of that owner's scripts (RBAC).
+func (s *Store) ListExecutions(ctx context.Context, scriptID, owner string, limit, offset int) ([]Execution, error) {
 	limit, offset = page(limit, offset)
 	q := `SELECT id,script_id,version,actor_id,status,error,trigger,created_at,updated_at FROM executions`
 	args := []any{}
+	where := []string{}
 	if scriptID != "" {
-		q += ` WHERE script_id=?`
+		where = append(where, "script_id=?")
 		args = append(args, scriptID)
+	}
+	if owner != "" {
+		where = append(where, "script_id IN (SELECT id FROM scripts WHERE owner=?)")
+		args = append(args, owner)
+	}
+	if len(where) > 0 {
+		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
 	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)

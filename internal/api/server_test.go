@@ -235,6 +235,47 @@ func TestAPIScriptScopedSecrets(t *testing.T) {
 	}
 }
 
+func TestAPIVisibilityIsPerUser(t *testing.T) {
+	ts := newTestServer(t)
+	do(t, ts, "PUT", "/api/users", map[string]any{"id": "alice", "name": "Alice", "role": "user"})
+	do(t, ts, "PUT", "/api/users", map[string]any{"id": "bob", "name": "Bob", "role": "user"})
+	do(t, ts, "PUT", "/api/users", map[string]any{"id": "boss", "name": "Boss", "role": "admin"})
+
+	_, data := doAs(t, ts, "alice", "POST", "/api/scripts", map[string]any{"name": "alice-1"})
+	var aSc store.Script
+	mustJSON(t, data, &aSc)
+	doAs(t, ts, "bob", "POST", "/api/scripts", map[string]any{"name": "bob-1"})
+
+	// Bob lists only his own.
+	_, data = doAs(t, ts, "bob", "GET", "/api/scripts", nil)
+	var bobScripts []store.Script
+	mustJSON(t, data, &bobScripts)
+	if len(bobScripts) != 1 || bobScripts[0].Name != "bob-1" {
+		t.Fatalf("bob sees: %+v", bobScripts)
+	}
+	// Bob cannot read Alice's script.
+	resp, _ := doAs(t, ts, "bob", "GET", "/api/scripts/"+aSc.ID, nil)
+	if resp.StatusCode != 403 {
+		t.Fatalf("bob reading alice's script: expected 403, got %d", resp.StatusCode)
+	}
+	// Admin sees everything.
+	_, data = doAs(t, ts, "boss", "GET", "/api/scripts", nil)
+	var all []store.Script
+	mustJSON(t, data, &all)
+	if len(all) != 2 {
+		t.Fatalf("admin sees %d scripts, want 2", len(all))
+	}
+}
+
+func TestAPICannotDeleteSelf(t *testing.T) {
+	ts := newTestServer(t)
+	do(t, ts, "PUT", "/api/users", map[string]any{"id": "admin1", "name": "A", "role": "admin"})
+	resp, _ := doAs(t, ts, "admin1", "DELETE", "/api/users/admin1", nil)
+	if resp.StatusCode != 400 {
+		t.Fatalf("self-delete: expected 400, got %d", resp.StatusCode)
+	}
+}
+
 func mustJSON(t *testing.T, data []byte, v any) {
 	t.Helper()
 	if err := json.Unmarshal(data, v); err != nil {
