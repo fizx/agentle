@@ -6,10 +6,11 @@ export default function Runs({ focusExec, clearFocus }) {
   const [sel, setSel] = useState(focusExec || null)
   const [detail, setDetail] = useState(null)
   const [trace, setTrace] = useState(null)
+  const [limit, setLimit] = useState(30)
 
   const refresh = useCallback(async () => {
-    setExecs(await api.listExecutions() || [])
-  }, [])
+    setExecs(await api.listExecutions('', limit, 0) || [])
+  }, [limit])
   useEffect(() => { refresh() }, [refresh])
 
   const select = useCallback(async (id) => {
@@ -36,6 +37,7 @@ export default function Runs({ focusExec, clearFocus }) {
             <div className="muted" style={{ fontSize: 11 }}>{e.trigger} · {new Date(e.created_at / 1e6).toLocaleTimeString()}</div>
           </div>
         ))}
+        {execs.length >= limit && <button style={{ marginTop: 8 }} onClick={() => setLimit(limit + 30)}>Load more</button>}
         {execs.length === 0 && <div className="muted">No runs yet.</div>}
       </div>
 
@@ -48,7 +50,7 @@ export default function Runs({ focusExec, clearFocus }) {
               <span className={'badge ' + STATUS[detail.status]}>{STATUS[detail.status]}</span>
             </div>
             <div className="muted" style={{ marginBottom: 12 }}>
-              script {detail.script_id} · v{detail.version} · {detail.trigger}
+              script {detail.script_id} · v{detail.version} · {detail.trigger} · actor <span className="mono">{detail.actor_id}</span>
             </div>
 
             {detail.error && <div className="card"><h3>Error</h3><pre className="err">{detail.error}</pre></div>}

@@ -48,7 +48,7 @@ Capabilities (all memoized RPCs unless noted):
 | `log(*args)` | system | appears in the trace |
 | `now()`, `sleep(seconds)` | system | deterministic time |
 | `rand()`, `rand_int(n)` | system | seeded per execution |
-| `kv_get(k)`, `kv_set(k,v)`, `kv_list(prefix)` | system | per-script durable store |
+| `store(k,v)`, `fetch(k)`, `keys(prefix)` | system | per-**actor** durable store (`load` is a reserved Starlark keyword, hence `fetch`) |
 | `http_get(url, headers={})`, `http_post(url, body, headers={})` | `http` grant | SSRF-guarded, domain allowlist |
 | `llm(messages, model=, temperature=)` | `llm` grant | OpenAI chat format |
 | `shell(argv, dir=, env=)` | `shell` grant | runs in a per-actor sandbox home dir |
@@ -57,14 +57,29 @@ Capabilities (all memoized RPCs unless noted):
 A capability the script's version hasn't been **granted** fails with
 `capability not granted` — grants are the security boundary.
 
+`main(input)` receives a **structured event**: `{id, kind, trigger_id, actor, data}`,
+where `data` is the run input (or a webhook body). `kind` is `dashboard`, `webhook`,
+or `cron`.
+
 ```python
 def main(input):
-    log("greeting", input["name"])
-    seen = kv_get("seen:" + input["name"]) or 0
-    kv_set("seen:" + input["name"], seen + 1)
-    reply = llm([{"role": "user", "content": "Greet " + input["name"]}])
+    name = (input.get("data") or {}).get("name", "world")
+    log("greeting", name, "via", input["kind"])
+    seen = fetch("seen:" + name) or 0
+    store("seen:" + name, seen + 1)
+    reply = llm([{"role": "user", "content": "Greet " + name}])
     return {"greeting": reply["content"], "times_seen": seen + 1}
 ```
+
+### Actors & triggers
+
+The `store`/`fetch` namespace is the **actor**, not the script. Manual (dashboard)
+runs and unbound trigger runs are *anonymous* — a unique actor per execution, so
+they share no state. A trigger can bind a **named actor** with a mustache template
+over the event, e.g. `webhook-{{event.id}}`, so all events for the same id share
+durable state (the actor model). Triggers, per-script secrets, and run history are
+managed on each script's page; global secrets, tool configs, and users live under
+Settings / Users (admin only). Identity is dev-mode (a header; no passwords yet).
 
 ## Architecture
 

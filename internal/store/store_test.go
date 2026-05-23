@@ -93,6 +93,96 @@ func TestSecretScopePrecedence(t *testing.T) {
 	}
 }
 
+func TestUsersCRUD(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "u1", "Alice", RoleAdmin); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser(ctx, "u2", "Bob", RoleUser); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := s.CountUsers(ctx)
+	if n != 2 {
+		t.Fatalf("count = %d", n)
+	}
+	u, _ := s.GetUser(ctx, "u1")
+	if u.Role != RoleAdmin {
+		t.Fatalf("role = %q", u.Role)
+	}
+	if err := s.DeleteUser(ctx, "u2"); err != nil {
+		t.Fatal(err)
+	}
+	users, _ := s.ListUsers(ctx)
+	if len(users) != 1 {
+		t.Fatalf("after delete: %d users", len(users))
+	}
+}
+
+func TestDeleteScriptCascades(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	_, _ = s.CreateScript(ctx, "s1", "doomed", "u1")
+	_, _ = s.SaveVersion(ctx, "s1", "def main(i): return 1", "", nil)
+	_ = s.PutTrigger(ctx, Trigger{ID: "t1", ScriptID: "s1", Kind: "cron", Spec: "* * * * *", Enabled: true})
+	_ = s.PutSecret(ctx, "K", ScriptScope("s1"), "v")
+
+	if err := s.DeleteScript(ctx, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetScript(ctx, "s1"); err != ErrNotFound {
+		t.Fatalf("script still present: %v", err)
+	}
+	if vs, _ := s.ListVersions(ctx, "s1"); len(vs) != 0 {
+		t.Fatalf("versions not cascaded: %d", len(vs))
+	}
+	if ts, _ := s.ListTriggers(ctx, "", "s1"); len(ts) != 0 {
+		t.Fatalf("triggers not cascaded: %d", len(ts))
+	}
+	if names, _ := s.ListSecretNames(ctx, ScriptScope("s1")); len(names) != 0 {
+		t.Fatalf("script secrets not cascaded: %v", names)
+	}
+}
+
+func TestTriggersAndWebhookLookup(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	_ = s.PutTrigger(ctx, Trigger{ID: "w1", ScriptID: "s1", Kind: "webhook", Spec: "tok-123", ActorTemplate: "u-{{event.id}}", Enabled: true})
+	_ = s.PutTrigger(ctx, Trigger{ID: "w2", ScriptID: "s1", Kind: "webhook", Spec: "tok-off", Enabled: false})
+
+	got, err := s.FindWebhookTrigger(ctx, "tok-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ActorTemplate != "u-{{event.id}}" {
+		t.Fatalf("actor_template = %q", got.ActorTemplate)
+	}
+	// Disabled webhook is not resolvable.
+	if _, err := s.FindWebhookTrigger(ctx, "tok-off"); err != ErrNotFound {
+		t.Fatalf("disabled webhook resolved: %v", err)
+	}
+	// Filter by script.
+	if ts, _ := s.ListTriggers(ctx, "webhook", "s1"); len(ts) != 2 {
+		t.Fatalf("list by script = %d", len(ts))
+	}
+}
+
+func TestScriptPagination(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		_, _ = s.CreateScript(ctx, "s"+string(rune('a'+i)), "name"+string(rune('a'+i)), "u1")
+	}
+	p1, _ := s.ListScripts(ctx, 2, 0)
+	p2, _ := s.ListScripts(ctx, 2, 2)
+	if len(p1) != 2 || len(p2) != 2 {
+		t.Fatalf("pagination sizes: %d %d", len(p1), len(p2))
+	}
+	if p1[0].ID == p2[0].ID {
+		t.Fatalf("pages overlap: %s", p1[0].ID)
+	}
+}
+
 func TestDurableLogReplayAndConflict(t *testing.T) {
 	s := openTest(t)
 	ls := engine.NewMemLeaser()
