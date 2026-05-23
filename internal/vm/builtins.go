@@ -70,6 +70,10 @@ func builtins() starlark.StringDict {
 		"kv_list":      starlark.NewBuiltin("kv_list", bKVList),
 		"shell":        starlark.NewBuiltin("shell", bShell),
 		"parallel_map": starlark.NewBuiltin("parallel_map", bParallelMap),
+		// Actor messaging. recv() is the blocking "yield" point that pops the
+		// next inbox message mid-flow (`yield` itself is a reserved Starlark word).
+		"send": starlark.NewBuiltin("send", bSend),
+		"recv": starlark.NewBuiltin("recv", bRecv),
 	}
 	return b
 }
@@ -267,6 +271,37 @@ func bParallelMap(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, 
 		}
 	}
 	return starlark.NewList(results), nil
+}
+
+func bSend(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var workspace string
+	var data starlark.Value
+	if err := starlark.UnpackArgs("send", args, kwargs, "workspace", &workspace, "data", &data); err != nil {
+		return nil, err
+	}
+	gv, err := starlarkToGo(data)
+	if err != nil {
+		return nil, err
+	}
+	return callCap(t, "inbox", "send", map[string]any{"workspace": workspace, "data": gv}, false, false)
+}
+
+func bRecv(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var timeout starlark.Value
+	if err := starlark.UnpackArgs("recv", args, kwargs, "timeout?", &timeout); err != nil {
+		return nil, err
+	}
+	secs := 0.0
+	if timeout != nil {
+		f, ok := starlark.AsFloat(timeout)
+		if !ok {
+			return nil, fmt.Errorf("recv: timeout must be a number")
+		}
+		secs = f
+	}
+	// Non-idempotent: consuming a message is a side effect, made crash-safe by the
+	// call's IdemKey. Returns the message data, or None on timeout.
+	return callCap(t, "inbox", "recv", map[string]any{"timeout_seconds": secs}, false, false)
 }
 
 func dictToStringMap(d *starlark.Dict) (map[string]string, error) {

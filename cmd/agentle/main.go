@@ -55,7 +55,7 @@ func run(addr, dataDir string, log *slog.Logger) error {
 
 	leaser := engine.NewMemLeaser()
 	sink := func(exec engine.ExecutionID, msg string) { log.Info("script.log", "exec", string(exec), "msg", msg) }
-	svc := platform.New(st, st.EventLog(leaser), leaser, pool, st.KV(), sink, platform.Config{})
+	svc := platform.New(st, st.EventLog(leaser), leaser, pool, st.KV(), st.Inbox(), sink, platform.Config{})
 
 	ctx := context.Background()
 	if err := seed(ctx, st, log); err != nil {

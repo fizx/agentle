@@ -129,10 +129,12 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 	}
 
 	// Miss. Write-ahead intent for non-idempotent calls so recovery knows a side
-	// effect may have fired.
+	// effect may have fired. The stable IdemKey is handed to the executor so it
+	// can dedupe external side effects across replay/retry.
 	if !inv.Idempotent {
+		inv.IdemKey = idemKey(m.st.exec, key)
 		intent := Event{Kind: EventRPCIntent, WallTime: time.Now().UnixNano(), RPC: &RPCRecord{
-			CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, IdemKey: idemKey(m.st.exec, key),
+			CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, IdemKey: inv.IdemKey,
 		}}
 		if err := m.append(ctx, intent, true); err != nil {
 			return nil, err

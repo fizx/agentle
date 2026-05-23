@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(func() { st.Close() })
 	ls := engine.NewMemLeaser()
-	svc := platform.New(st, st.EventLog(ls), ls, nil, st.KV(), nil, platform.Config{})
+	svc := platform.New(st, st.EventLog(ls), ls, nil, st.KV(), st.Inbox(), nil, platform.Config{})
 	srv := New(svc, nil, nil, nil)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)

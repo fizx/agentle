@@ -21,6 +21,7 @@ import (
 type Config struct {
 	MaxSleep    time.Duration // cap on script sleep()
 	ShellMaxCPU time.Duration // cap on a single shell command
+	MaxRecvWait time.Duration // cap on a blocking recv()
 }
 
 // Service is the integration hub for the control plane and triggers.
@@ -30,18 +31,19 @@ type Service struct {
 	Leaser  engine.Leaser
 	Pool    engine.SandboxPool
 	KV      caps.KVStore
+	Inbox   caps.MessageQueue
 	Runner  engine.Runner
 	Cfg     Config
 	LogSink caps.LogSink
 }
 
-// New builds a Service. log/leaser/pool/kv are injected so backends are swappable.
-func New(st *store.Store, log engine.Log, leaser engine.Leaser, pool engine.SandboxPool, kv caps.KVStore, sink caps.LogSink, cfg Config) *Service {
+// New builds a Service. log/leaser/pool/kv/inbox are injected so backends are swappable.
+func New(st *store.Store, log engine.Log, leaser engine.Leaser, pool engine.SandboxPool, kv caps.KVStore, inbox caps.MessageQueue, sink caps.LogSink, cfg Config) *Service {
 	if cfg.MaxSleep == 0 {
 		cfg.MaxSleep = 30 * time.Second
 	}
 	return &Service{
-		Store: st, Log: log, Leaser: leaser, Pool: pool, KV: kv,
+		Store: st, Log: log, Leaser: leaser, Pool: pool, KV: kv, Inbox: inbox,
 		Runner: &vm.Runner{}, Cfg: cfg, LogSink: sink,
 	}
 }
@@ -81,7 +83,10 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 		"log":  caps.Log(exec, s.LogSink),
 		"time": caps.Time(s.Cfg.MaxSleep),
 		"rand": caps.Rand(exec),
-		"kv":   caps.KV(s.KV, actorID), // namespaced by actor, not script
+		"kv":   caps.KV(s.KV, actorID), // namespaced by workspace, not script
+	}
+	if s.Inbox != nil {
+		env["inbox"] = caps.Inbox(s.Inbox, actorID, s.Cfg.MaxRecvWait, 0)
 	}
 	for _, g := range grants {
 		cfg, err := s.Store.GetToolConfig(ctx, g.ConfigID)

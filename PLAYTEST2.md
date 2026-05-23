@@ -1,2 +1,4 @@
 - add a restful API
 - add an MCP implementation and examples (both direct call and llm tool usage)
+- i think its ok to snapshot to object storage only on debounced 1 minute or sandbox teardown
+- please implement test coverage checks

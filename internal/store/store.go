@@ -266,6 +266,14 @@ CREATE TABLE IF NOT EXISTS kv (
   value TEXT NOT NULL,
   PRIMARY KEY (ns, key)
 );
+CREATE TABLE IF NOT EXISTS inbox (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  workspace TEXT NOT NULL,
+  data TEXT NOT NULL,
+  consumed_by TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_inbox_ws ON inbox(workspace, consumed_by, id);
 `
 
 func now() int64 { return time.Now().UnixNano() }

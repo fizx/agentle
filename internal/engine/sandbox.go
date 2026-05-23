@@ -49,6 +49,11 @@ type Invocation struct {
 	// MutatesFS: writes the actor home dir, forcing an fs snapshot barrier when
 	// the result commits.
 	MutatesFS bool `json:"mutates_fs"`
+
+	// IdemKey is set by the Mediator for non-idempotent calls before Execute. It
+	// is stable across replay/retry of the same call site, so executors with
+	// external side effects (e.g. consuming an inbox message) can dedupe.
+	IdemKey string `json:"-"`
 }
 
 // Executor performs a real (non-replayed) invocation against a bound tool. Called

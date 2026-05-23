@@ -19,7 +19,7 @@ func newService(t *testing.T) *Service {
 	}
 	t.Cleanup(func() { st.Close() })
 	ls := engine.NewMemLeaser()
-	return New(st, st.EventLog(ls), ls, nil, st.KV(), nil, Config{})
+	return New(st, st.EventLog(ls), ls, nil, st.KV(), st.Inbox(), nil, Config{})
 }
 
 func TestEndToEndRunWithGrant(t *testing.T) {
