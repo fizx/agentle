@@ -46,6 +46,14 @@ export default function Settings() {
     setCId(''); toast('config saved'); refresh()
   }
   const onCapChange = (cap: string) => { setCCap(cap); setCCfg(CONFIG_TEMPLATES[cap] || '{}') }
+  const editConfig = (c: ToolConfig) => {
+    setCId(c.id); setCCap(c.capability); setCSecret(c.secret_ref || '')
+    setCCfg(JSON.stringify(c.config ?? {}, null, 2))
+  }
+  const delConfig = async (id: string) => {
+    if (!confirm(`Delete config "${id}"? Scripts granting it will fail until re-granted.`)) return
+    await api.deleteConfig(id); toast('config deleted'); refresh()
+  }
 
   return (
     <div className="main" style={{ maxWidth: 980, margin: '0 auto' }}>
@@ -96,11 +104,21 @@ export default function Settings() {
           </div>
         </div>
         <table style={{ marginTop: 12 }}>
-          <thead><tr><th>id</th><th>capability</th><th>secret</th></tr></thead>
+          <thead><tr><th>id</th><th>capability</th><th>secret</th><th /></tr></thead>
           <tbody>
             {configs.map((c) => (
-              <tr key={c.id}><td className="mono">{c.id}</td><td>{c.capability}</td><td className="muted mono">{c.secret_ref || '—'}</td></tr>
+              <tr key={c.id}>
+                <td className="mono">{c.id}</td>
+                <td>{c.capability}</td>
+                <td className="muted mono">
+                  {c.secret_ref
+                    ? <>{c.secret_ref}{c.secret_present === false && <span className="err" style={{ marginLeft: 6, fontSize: 11 }}>● not set</span>}</>
+                    : '—'}
+                </td>
+                <td><a onClick={() => editConfig(c)}>edit</a> · <a onClick={() => delConfig(c.id)}>delete</a></td>
+              </tr>
             ))}
+            {configs.length === 0 && <tr><td colSpan={4} className="muted">none</td></tr>}
           </tbody>
         </table>
       </div>

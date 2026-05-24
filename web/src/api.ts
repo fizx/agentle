@@ -57,6 +57,7 @@ export const api = {
 
   listConfigs: () => req<ToolConfig[]>('GET', '/configs'),
   putConfig: (c: Partial<ToolConfig>) => req<{ id: string }>('PUT', '/configs', c),
+  deleteConfig: (id: string) => req<void>('DELETE', `/configs/${id}`),
 
   listSecrets: (script?: string) => req<{ names: string[]; scope: string }>('GET', '/secrets' + qs({ script })),
   putSecret: (name: string, value: string, script?: string) =>

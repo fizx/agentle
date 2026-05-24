@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Span, Trace } from '../types'
 
 // TraceTimeline renders the event log as a gantt-style span waterfall: each RPC
@@ -8,6 +9,7 @@ import type { Span, Trace } from '../types'
 const TICKS = 4
 
 export function TraceTimeline({ trace }: { trace: Trace }) {
+  const [zoom, setZoom] = useState(1)
   const spans = trace.spans
   if (spans.length === 0) return <div className="muted">No events.</div>
 
@@ -25,8 +27,16 @@ export function TraceTimeline({ trace }: { trace: Trace }) {
   let prevEnd = t0
 
   return (
-    <div className="timeline">
-      <div className="tl-axis">
+    <>
+      <div className="row" style={{ justifyContent: 'flex-end', gap: 6, marginBottom: 6 }}>
+        <span className="muted" style={{ fontSize: 11 }}>zoom</span>
+        <button onClick={() => setZoom((z) => Math.max(1, +(z / 1.5).toFixed(2)))} disabled={zoom <= 1}>−</button>
+        <span className="mono muted" style={{ fontSize: 11, minWidth: 34, textAlign: 'center' }}>{zoom.toFixed(1)}×</span>
+        <button onClick={() => setZoom((z) => Math.min(40, +(z * 1.5).toFixed(2)))}>+</button>
+      </div>
+      <div className="tl-scroll">
+        <div className="timeline" style={{ width: zoom * 100 + '%' }}>
+          <div className="tl-axis">
         <div className="tl-label muted" style={{ fontSize: 11 }}>{rows.length} spans · {fmtMs(totalMs)}</div>
         <div className="tl-axis-track">
           {Array.from({ length: TICKS + 1 }).map((_, i) => (
@@ -63,7 +73,9 @@ export function TraceTimeline({ trace }: { trace: Trace }) {
           </div>
         )
       })}
-    </div>
+        </div>
+      </div>
+    </>
   )
 }
 

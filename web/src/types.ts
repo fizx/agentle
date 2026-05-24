@@ -40,6 +40,7 @@ export interface ToolConfig {
   config: unknown
   secret_ref?: string
   created_at: number
+  secret_present?: boolean // false => referenced secret isn't set yet
 }
 
 export interface Trigger {

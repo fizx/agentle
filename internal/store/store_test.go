@@ -132,6 +132,31 @@ func TestSecretsScopeMigration(t *testing.T) {
 	}
 }
 
+func TestToolConfigDeleteAndSecretExists(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	if err := s.PutToolConfig(ctx, ToolConfig{ID: "c1", Capability: "llm", SecretRef: "OPENAI_API_KEY"}); err != nil {
+		t.Fatal(err)
+	}
+	// Secret not set yet.
+	if ok, _ := s.SecretExists(ctx, "OPENAI_API_KEY", ScopeGlobal); ok {
+		t.Fatal("secret should not exist yet")
+	}
+	_ = s.PutSecret(ctx, "OPENAI_API_KEY", ScopeGlobal, "sk-x")
+	if ok, _ := s.SecretExists(ctx, "OPENAI_API_KEY", ScopeGlobal); !ok {
+		t.Fatal("secret should exist after PutSecret")
+	}
+
+	// Delete the config.
+	if err := s.DeleteToolConfig(ctx, "c1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetToolConfig(ctx, "c1"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound after delete, got %v", err)
+	}
+}
+
 func TestUsersCRUD(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()

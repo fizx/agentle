@@ -5,6 +5,7 @@ import { CRON_PRESETS } from '../types'
 import { StatusBadge } from '../components/Badge'
 import { Json } from '../components/Json'
 import { CodeEditor } from '../components/CodeEditor'
+import { PromptModal } from '../components/Modal'
 
 type Sub = 'editor' | 'runs' | 'triggers' | 'secrets'
 
@@ -46,15 +47,16 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
     await refresh(); select(sc.id)
   }
 
+  const grantRefs = (): GrantRefInput[] => grants
+    .map((cid) => configs.find((c) => c.id === cid))
+    .filter((c): c is ToolConfig => !!c)
+    .map((c) => ({ capability: c.capability, config_id: c.id }))
+
   const save = async () => {
     if (!sel) return
     setBusy(true); setErr('')
     try {
-      const grantRefs: GrantRefInput[] = grants
-        .map((cid) => configs.find((c) => c.id === cid))
-        .filter((c): c is ToolConfig => !!c)
-        .map((c) => ({ capability: c.capability, config_id: c.id }))
-      await api.saveVersion(sel, source, grantRefs)
+      await api.saveVersion(sel, source, grantRefs())
       await select(sel)
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
@@ -65,8 +67,16 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
     let parsed: unknown
     try { parsed = input.trim() ? JSON.parse(input) : null }
     catch (e) { setErr('input is not valid JSON: ' + (e as Error).message); setBusy(false); return }
-    try { setResult(await api.run(sel, parsed)) }
-    catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
+    try {
+      // Running implies a save: persist a new version iff the editor differs from
+      // the latest saved one, then run (so you never accidentally run stale code).
+      const latest = detail?.versions?.[0]
+      if (!latest || latest.source !== source) {
+        await api.saveVersion(sel, source, grantRefs())
+        await select(sel)
+      }
+      setResult(await api.run(sel, parsed))
+    } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
 
   const del = async () => {
@@ -198,13 +208,18 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
 
 function ExampleGallery({ onCreate, onCancel }: { onCreate: (name: string, src: string) => void; onCancel: () => void }) {
   const [examples, setExamples] = useState<Example[]>([])
+  const [naming, setNaming] = useState<{ title: string; source: string } | null>(null)
   useEffect(() => { api.examples().then(setExamples) }, [])
-  const pick = (title: string, source: string) => {
-    const name = prompt('Script name?', title)
-    if (name) onCreate(name, source)
-  }
+  const pick = (title: string, source: string) => setNaming({ title, source })
   return (
     <div className="card">
+      {naming && (
+        <PromptModal
+          title="New script" label="Script name" initial={naming.title} confirmLabel="Create"
+          onSubmit={(name) => { setNaming(null); onCreate(name, naming.source) }}
+          onCancel={() => setNaming(null)}
+        />
+      )}
       <div className="row spread"><h2>Start from an example</h2><button onClick={onCancel}>cancel</button></div>
       <div className="muted" style={{ marginBottom: 10 }}>Pick a template, or start blank. Capabilities listed need a matching grant under Settings.</div>
       <div className="example-grid">

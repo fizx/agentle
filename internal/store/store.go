@@ -456,6 +456,14 @@ func (s *Store) PutToolConfig(ctx context.Context, c ToolConfig) error {
 	return err
 }
 
+// DeleteToolConfig removes a tool config. Grants that still reference it will fail
+// at run time with a clear "config not found" error (surfaced as a dangling grant
+// in the UI).
+func (s *Store) DeleteToolConfig(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM tool_configs WHERE id=?`, id)
+	return err
+}
+
 func (s *Store) GetToolConfig(ctx context.Context, id string) (*ToolConfig, error) {
 	var c ToolConfig
 	var cfg string
@@ -528,6 +536,21 @@ func (s *Store) ResolveSecret(ctx context.Context, name, scriptID string) (strin
 		return "", ErrNotFound
 	}
 	return v, err
+}
+
+// SecretExists reports whether a secret with name is set in scope (never returns
+// the value). Used to surface "this configured capability needs a secret that
+// isn't set yet" in the UI.
+func (s *Store) SecretExists(ctx context.Context, name, scope string) (bool, error) {
+	if scope == "" {
+		scope = ScopeGlobal
+	}
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM secrets WHERE name=? AND scope=? LIMIT 1`, name, scope).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // ListSecretNames returns only names in a scope — never values.

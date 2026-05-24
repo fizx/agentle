@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 
 		r.Get("/configs", s.listConfigs)
 		r.Put("/configs", s.putConfig)
+		r.Delete("/configs/{id}", s.deleteConfig)
 
 		r.Get("/secrets", s.listSecrets)
 		r.Put("/secrets", s.putSecret)
@@ -384,9 +385,39 @@ func (s *Server) execIfVisible(w http.ResponseWriter, r *http.Request, id string
 
 // --- configs & secrets -----------------------------------------------------
 
+// configView augments a tool config with whether its referenced secret is set
+// (in the global scope), so the UI can flag configs that need a secret.
+type configView struct {
+	store.ToolConfig
+	SecretPresent bool `json:"secret_present"`
+}
+
 func (s *Server) listConfigs(w http.ResponseWriter, r *http.Request) {
 	configs, err := s.svc.Store.ListToolConfigs(r.Context())
-	writeOrErr(w, configs, err)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := make([]configView, 0, len(configs))
+	for _, c := range configs {
+		present := true // no secret ref => nothing to flag
+		if c.SecretRef != "" {
+			present, _ = s.svc.Store.SecretExists(r.Context(), c.SecretRef, store.ScopeGlobal)
+		}
+		out = append(out, configView{ToolConfig: c, SecretPresent: present})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) deleteConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if err := s.svc.Store.DeleteToolConfig(r.Context(), chi.URLParam(r, "id")); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {
