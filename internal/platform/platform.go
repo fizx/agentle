@@ -115,6 +115,7 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 		"time": caps.Time(s.Cfg.MaxSleep),
 		"rand": caps.Rand(exec),
 		"kv":   caps.KV(s.KV, actorID), // namespaced by workspace, not script
+		"ui":   caps.UI(),
 	}
 	if s.Inbox != nil {
 		env["inbox"] = caps.Inbox(s.Inbox, actorID)

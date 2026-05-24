@@ -68,6 +68,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/executions", s.listExecutions)
 		r.Get("/executions/{id}", s.getExecution)
 		r.Get("/executions/{id}/trace", s.getTrace)
+		r.Get("/executions/{id}/ui", s.getUI)
+		r.Post("/executions/{id}/messages", s.postMessage)
 
 		r.Get("/spend", s.spend)
 
@@ -364,6 +366,31 @@ func (s *Server) getTrace(w http.ResponseWriter, r *http.Request) {
 	}
 	tr, err := s.svc.GetTrace(r.Context(), id)
 	writeOrErr(w, tr, err)
+}
+
+// getUI returns the interactive panel projection (chat/form + transcript).
+func (s *Server) getUI(w http.ResponseWriter, r *http.Request) {
+	if s.execIfVisible(w, r, chi.URLParam(r, "id")) == nil {
+		return
+	}
+	ui, err := s.svc.GetUI(r.Context(), chi.URLParam(r, "id"))
+	writeOrErr(w, ui, err)
+}
+
+// postMessage delivers a chat input / form submission into the run's workspace.
+func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
+	if s.execIfVisible(w, r, chi.URLParam(r, "id")) == nil {
+		return
+	}
+	var data json.RawMessage
+	if !readJSON(w, r, &data) {
+		return
+	}
+	if err := s.svc.PostMessage(r.Context(), chi.URLParam(r, "id"), data); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // execIfVisible loads an execution and enforces that the caller may see it

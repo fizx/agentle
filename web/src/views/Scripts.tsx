@@ -6,6 +6,7 @@ import { StatusBadge } from '../components/Badge'
 import { Json } from '../components/Json'
 import { CodeEditor } from '../components/CodeEditor'
 import { PromptModal } from '../components/Modal'
+import { UIPanel } from '../components/UIPanel'
 
 type Sub = 'editor' | 'runs' | 'triggers' | 'secrets'
 
@@ -24,6 +25,7 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
   const [sub, setSub] = useState<Sub>('editor')
   const [limit, setLimit] = useState(20)
   const [picking, setPicking] = useState(false)
+  const [uiExec, setUiExec] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setScripts((await api.listScripts(limit, 0)) || [])
@@ -75,7 +77,10 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
         await api.saveVersion(sel, source, grantRefs())
         await select(sel)
       }
-      setResult(await api.run(sel, parsed))
+      const exe = await api.run(sel, parsed)
+      setResult(exe)
+      // If the run declared an interactive UI, open its panel.
+      try { if ((await api.getUI(exe.id)).kind) setUiExec(exe.id) } catch { /* no UI */ }
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
 
@@ -109,6 +114,7 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
       </div>
 
       <div className="main">
+        {uiExec && <UIPanel execId={uiExec} onClose={() => setUiExec(null)} />}
         {picking && <ExampleGallery onCreate={createFrom} onCancel={() => setPicking(false)} />}
         {!sel && !picking && <div className="muted">Select a script, or click + New to start from an example.</div>}
         {sel && detail && (
@@ -159,7 +165,10 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
                   <div className="card">
                     <div className="row spread">
                       <h3>Result <StatusBadge status={result.status} /></h3>
-                      <a onClick={() => onOpenRun(result.id)}>view trace →</a>
+                      <div className="row" style={{ gap: 10 }}>
+                        <a onClick={() => setUiExec(result.id)}>open panel ↔</a>
+                        <a onClick={() => onOpenRun(result.id)}>view trace →</a>
+                      </div>
                     </div>
                     <div className="row spread" style={{ marginBottom: 6 }}>
                       <span className="muted" style={{ fontSize: 12 }}>

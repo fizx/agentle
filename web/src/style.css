@@ -91,6 +91,16 @@ h3 { font-size: 14px; margin: 0 0 8px; }
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal { background: var(--panel, var(--bg)); border: 1px solid var(--border); border-radius: 8px; padding: 16px; min-width: 360px; max-width: 90vw; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
 
+/* chat/form panel */
+.chat-log { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 0; }
+.chat-msg { max-width: 85%; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); }
+.chat-msg.them { align-self: flex-start; background: var(--panel2); }
+.chat-msg.me { align-self: flex-end; background: var(--accent); color: #07101f; }
+.chat-role { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+.chat-msg.me .chat-role { color: #07101f; opacity: .7; }
+.chat-text { white-space: normal; word-break: break-word; }
+.chat-text code { background: rgba(127,127,127,.2); padding: 0 3px; border-radius: 3px; }
+
 /* trace timeline */
 .tl-scroll { overflow-x: auto; }
 .timeline { display: flex; flex-direction: column; gap: 4px; min-width: 100%; }

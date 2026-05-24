@@ -110,6 +110,41 @@ export interface Capability {
   doc: string
 }
 
+export interface UIMessage {
+  role: string
+  text: string
+  blocks?: UIBlock[]
+}
+
+export interface UIBlock {
+  type: string // code | table | image
+  lang?: string
+  text?: string
+  columns?: string[]
+  rows?: string[][]
+  url?: string
+  alt?: string
+}
+
+export interface UIField {
+  name: string
+  label?: string
+  type: string // text | textarea | number | select | checkbox
+  options?: string[]
+  required?: boolean
+  default?: unknown
+}
+
+export interface RunUI {
+  kind: string // chat | form | ''
+  title?: string
+  intro?: string
+  fields?: UIField[]
+  transcript: UIMessage[]
+  status: number
+  awaiting: boolean
+}
+
 export interface Plugin {
   id: string
   name: string

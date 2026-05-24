@@ -131,6 +131,43 @@ def main(input):
 `,
 	},
 	{
+		ID:           "chat_ui",
+		Title:        "Chat UI",
+		Description:  "Running this from the dashboard opens a chat panel; the script recv()s your messages and ui_say()s replies.",
+		Capabilities: []string{},
+		Source: `# Run from the dashboard to open a chat panel. recv() durably suspends between
+# messages; ui_say() appends to the transcript (markdown supported).
+def main(input):
+    ui_chat(title="Echo bot", intro="Say something — I'll shout it back. Send /quit to end.")
+    for _ in range(100):
+        msg = recv()                  # suspend until the user sends
+        if msg == None:
+            break
+        text = (msg.get("text") or "").strip()
+        if text == "/quit":
+            ui_say("Bye! 👋")
+            break
+        ui_say("**" + text.upper() + "**")
+    return {"done": True}
+`,
+	},
+	{
+		ID:           "form_ui",
+		Title:        "Form UI",
+		Description:  "Running this from the dashboard pops a form; the script receives the submitted values.",
+		Capabilities: []string{},
+		Source: `# ui_form declares a form and suspends until you submit it.
+def main(input):
+    vals = ui_form([
+        field("name", "Your name", required=True),
+        field("color", "Favorite color", type="select", options=["red", "green", "blue"]),
+        field("subscribe", "Subscribe?", type="checkbox"),
+    ])
+    ui_say("Thanks, " + (vals.get("name") or "stranger") + "! You picked " + str(vals.get("color")) + ".")
+    return vals
+`,
+	},
+	{
 		ID:           "plugin_tool",
 		Title:        "Capability plugin (sandboxed MCP tool)",
 		Description:  "Calls a tool provided by an agentle-managed plugin running in the sandbox (grant the mcp-plugin config).",

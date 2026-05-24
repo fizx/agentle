@@ -41,6 +41,7 @@ func catalog() []Builtin {
 	all = append(all, groupActor...)
 	all = append(all, groupConcurrency...)
 	all = append(all, groupShell...)
+	all = append(all, groupUI...)
 	return all
 }
 
