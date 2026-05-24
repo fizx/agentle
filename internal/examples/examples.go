@@ -131,6 +131,18 @@ def main(input):
 `,
 	},
 	{
+		ID:           "plugin_tool",
+		Title:        "Capability plugin (sandboxed MCP tool)",
+		Description:  "Calls a tool provided by an agentle-managed plugin running in the sandbox (grant the mcp-plugin config).",
+		Capabilities: []string{"mcp"},
+		Source: `# The granted mcp config points at a plugin (Python "text-tools" with a
+# "reverse" tool). Plugin tools appear in mcp_list_tools() like any MCP server.
+def main(input):
+    text = (input.get("data") or {}).get("text", "hello world")
+    return {"reversed": mcp_call("reverse", {"text": text})["text"]}
+`,
+	},
+	{
 		ID:           "mcp_agent",
 		Title:        "MCP: LLM tool use",
 		Description:  "The LLM is handed the MCP server's tools and drives them in a bounded tool-use loop (grant llm + mcp).",

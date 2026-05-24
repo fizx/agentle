@@ -42,6 +42,14 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 	if err := st.PutToolConfig(ctx, store.ToolConfig{ID: "mcp-demo", Capability: "mcp", Config: json.RawMessage(`{}`)}); err != nil {
 		return err
 	}
+	// A demo capability plugin (Python) exposing a "reverse" MCP tool, plus an mcp
+	// config that grants it. Requires python3 in the sandbox when actually called.
+	if err := st.PutPlugin(ctx, store.Plugin{ID: "pl_demo", Name: "text-tools", Runtime: "python", Enabled: true, Source: demoPluginSource}); err != nil {
+		return err
+	}
+	if err := st.PutToolConfig(ctx, store.ToolConfig{ID: "mcp-plugin", Capability: "mcp", Config: json.RawMessage(`{"plugin_id":"pl_demo","name":"text-tools"}`)}); err != nil {
+		return err
+	}
 
 	llmGrant := "llm-mock"
 	// If an API key is present in the environment, wire a real OpenAI-compatible config.
@@ -92,3 +100,17 @@ func envOr(k, def string) string {
 	}
 	return def
 }
+
+// demoPluginSource is a Python capability plugin providing a "reverse" MCP tool.
+// argv: [-c, <subcmd>, <tool>, <args-json>] (so sys.argv[1]=subcmd, [3]=args).
+const demoPluginSource = `import sys, json
+cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+if cmd == "list":
+    print(json.dumps([
+        {"name": "reverse", "description": "reverse text",
+         "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
+    ]))
+elif cmd == "call":
+    args = json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+    print(args.get("text", "")[::-1])
+`

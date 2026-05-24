@@ -1,5 +1,5 @@
 import type {
-  ApiToken, Capability, Example, Execution, Script, ScriptDetail, Spend, ToolConfig, Trace, Trigger, User, Version,
+  ApiToken, Capability, Example, Execution, Plugin, Script, ScriptDetail, Spend, ToolConfig, Trace, Trigger, User, Version,
 } from './types'
 
 const USER_KEY = 'agentle.user'
@@ -73,6 +73,10 @@ export const api = {
   listTokens: () => req<ApiToken[]>('GET', '/tokens'),
   createToken: (name: string) => req<ApiToken>('POST', '/tokens', { name }),
   deleteToken: (id: string) => req<void>('DELETE', `/tokens/${id}`),
+
+  listPlugins: () => req<Plugin[]>('GET', '/plugins'),
+  putPlugin: (p: Partial<Plugin>) => req<Plugin>('PUT', '/plugins', p),
+  deletePlugin: (id: string) => req<void>('DELETE', `/plugins/${id}`),
 }
 
 export interface GrantRefInput {

@@ -305,6 +305,14 @@ CREATE TABLE IF NOT EXISTS usage (
   PRIMARY KEY (exec, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
+CREATE TABLE IF NOT EXISTS plugins (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  runtime TEXT NOT NULL DEFAULT 'python',
+  source TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at INTEGER NOT NULL
+);
 `
 
 func now() int64 { return time.Now().UnixNano() }

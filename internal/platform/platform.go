@@ -136,13 +136,25 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 			var c struct {
 				Endpoint string `json:"endpoint"`
 				Name     string `json:"name"`
+				PluginID string `json:"plugin_id"`
 			}
 			_ = json.Unmarshal(cfg.Config, &c)
 			name := c.Name
 			if name == "" {
 				name = cfg.ID
 			}
-			mcpServers = append(mcpServers, caps.MCPServer{Name: name, Endpoint: c.Endpoint, APIKey: secret})
+			srv := caps.MCPServer{Name: name, Endpoint: c.Endpoint, APIKey: secret}
+			if c.PluginID != "" {
+				p, err := s.Store.GetPlugin(ctx, c.PluginID)
+				if err != nil {
+					return nil, fmt.Errorf("mcp config %q -> plugin %q: %w", cfg.ID, c.PluginID, err)
+				}
+				if !p.Enabled {
+					return nil, fmt.Errorf("mcp config %q references disabled plugin %q", cfg.ID, c.PluginID)
+				}
+				srv.Plugin = &caps.PluginSpec{Pool: s.Pool, Runtime: p.Runtime, Source: p.Source}
+			}
+			mcpServers = append(mcpServers, srv)
 			continue
 		}
 		exe, err := buildExecutor(g.Capability, cfg, secret)

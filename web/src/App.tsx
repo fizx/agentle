@@ -3,11 +3,12 @@ import Scripts from './views/Scripts'
 import Runs from './views/Runs'
 import Settings from './views/Settings'
 import Spend from './views/Spend'
+import Plugins from './views/Plugins'
 import Users from './views/Users'
 import { api, setUserId } from './api'
 import type { User } from './types'
 
-type Tab = 'scripts' | 'runs' | 'spend' | 'settings' | 'users'
+type Tab = 'scripts' | 'runs' | 'spend' | 'settings' | 'plugins' | 'users'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('scripts')
@@ -28,7 +29,7 @@ export default function App() {
 
   const isAdmin = me?.role === 'admin'
   const tabs: Tab[] = isAdmin
-    ? ['scripts', 'runs', 'spend', 'settings', 'users']
+    ? ['scripts', 'runs', 'spend', 'settings', 'plugins', 'users']
     : ['scripts', 'runs', 'spend', 'settings']
 
   return (
@@ -54,6 +55,7 @@ export default function App() {
       {tab === 'runs' && <Runs focusExec={focusExec} clearFocus={() => setFocusExec(null)} />}
       {tab === 'spend' && <Spend />}
       {tab === 'settings' && <Settings />}
+      {tab === 'plugins' && <Plugins />}
       {tab === 'users' && <Users onChange={loadIdentity} me={me} />}
     </>
   )

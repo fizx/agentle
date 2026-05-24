@@ -10,16 +10,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kylemaxwell/agentle/internal/engine"
 	"github.com/kylemaxwell/agentle/internal/mcp"
 )
 
-// MCPServer is one bound MCP server instance. An empty Endpoint selects an offline
-// mock server (demo tools) so MCP scripts are playable with no external server.
+// MCPServer is one bound MCP server instance. Routing precedence: a Plugin (an
+// agentle-managed program run per-call in the sandbox) wins; else a non-empty
+// Endpoint is a real JSON-RPC server; else the offline mock (demo tools), so MCP
+// scripts are playable with no external server.
 type MCPServer struct {
-	Name     string // server name surfaced to scripts (tool["server"])
-	Endpoint string // MCP server URL (JSON-RPC 2.0 over HTTP); empty => mock
-	APIKey   string // secret; injected as Bearer, never visible to the script
+	Name     string      // server name surfaced to scripts (tool["server"])
+	Endpoint string      // MCP server URL (JSON-RPC 2.0 over HTTP); empty => mock
+	APIKey   string      // secret; injected as Bearer, never visible to the script
+	Plugin   *PluginSpec // set => tools are provided by a sandboxed subprocess plugin
+}
+
+// PluginSpec describes an agentle-managed plugin that provides MCP tools by being
+// run, per call, in the sandbox: argv[1]="list" prints the tool catalog; "call"
+// with the tool name + args-JSON prints the result.
+type PluginSpec struct {
+	Pool    engine.SandboxPool
+	Runtime string // python | node | bash
+	Source  string
 }
 
 // MCPRouter returns the "mcp" capability over zero or more bound MCP servers:
@@ -34,7 +47,7 @@ func MCPRouter(servers []MCPServer) engine.Executor {
 	client := &http.Client{Timeout: 60 * time.Second}
 	clients := make([]*mcpClient, len(servers))
 	for i, s := range servers {
-		clients[i] = &mcpClient{server: s, http: client, mock: strings.TrimSpace(s.Endpoint) == "", demo: mcp.NewDemo()}
+		clients[i] = &mcpClient{server: s, http: client, mock: s.Plugin == nil && strings.TrimSpace(s.Endpoint) == "", demo: mcp.NewDemo()}
 	}
 	byName := map[string]*mcpClient{}
 	for _, c := range clients {
@@ -106,6 +119,17 @@ type mcpClient struct {
 }
 
 func (c *mcpClient) listTools(ctx context.Context) ([]map[string]any, error) {
+	if c.server.Plugin != nil {
+		out, err := c.server.Plugin.run(ctx, "list", "", nil)
+		if err != nil {
+			return nil, err
+		}
+		var tools []map[string]any
+		if err := json.Unmarshal(out, &tools); err != nil {
+			return nil, fmt.Errorf("plugin %q list: %w (%s)", c.server.Name, err, truncate(string(out), 200))
+		}
+		return tools, nil
+	}
 	if c.mock {
 		raw, _ := json.Marshal(c.demo.Tools())
 		var out []map[string]any
@@ -122,6 +146,14 @@ func (c *mcpClient) listTools(ctx context.Context) ([]map[string]any, error) {
 }
 
 func (c *mcpClient) callTool(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
+	if c.server.Plugin != nil {
+		argsJSON, _ := json.Marshal(args)
+		out, err := c.server.Plugin.run(ctx, "call", tool, argsJSON)
+		if err != nil {
+			return toolResult("", err), nil
+		}
+		return toolResult(strings.TrimSpace(string(out)), nil), nil
+	}
 	if c.mock {
 		text, err := c.demo.Call(tool, args)
 		return toolResult(text, err), nil
@@ -146,6 +178,41 @@ func (c *mcpClient) callTool(ctx context.Context, tool string, args map[string]a
 		return toolResult(text.String(), fmt.Errorf("%s", text.String())), nil
 	}
 	return toolResult(text.String(), nil), nil
+}
+
+// run executes the plugin in a fresh sandbox for one operation (per-call model):
+// argv = runtime invocation of the source + [subcmd, tool, argsJSON]. Returns
+// stdout. The sandbox is released without persisting (plugins are stateless).
+func (p *PluginSpec) run(ctx context.Context, subcmd, tool string, argsJSON []byte) ([]byte, error) {
+	if p.Pool == nil {
+		return nil, fmt.Errorf("plugin: no sandbox pool configured")
+	}
+	sb, err := p.Pool.Acquire(ctx, engine.ExecutionID("plugin:"+uuid.NewString()), "", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer p.Pool.Release(ctx, sb, false)
+	res, err := sb.Exec(ctx, engine.Command{Argv: pluginArgv(p.Runtime, p.Source, subcmd, tool, string(argsJSON))})
+	if err != nil {
+		return nil, err
+	}
+	if res.Code != 0 {
+		return nil, fmt.Errorf("plugin exit %d: %s", res.Code, truncate(string(res.Stderr), 200))
+	}
+	return res.Stdout, nil
+}
+
+// pluginArgv builds the sandbox command that runs a plugin's source for a runtime,
+// passing [subcmd, tool, argsJSON] as positional arguments to the program.
+func pluginArgv(runtime, source, subcmd, tool, args string) []string {
+	switch runtime {
+	case "node", "javascript":
+		return []string{"node", "-e", source, subcmd, tool, args}
+	case "bash", "sh":
+		return []string{"bash", "-c", source, "plugin", subcmd, tool, args}
+	default: // python
+		return []string{"python3", "-c", source, subcmd, tool, args}
+	}
 }
 
 // toolResult is the shape returned to the script for a tool call: a flattened text

@@ -110,6 +110,15 @@ export interface Capability {
   doc: string
 }
 
+export interface Plugin {
+  id: string
+  name: string
+  runtime: string // python | node | bash
+  source: string
+  enabled: boolean
+  created_at: number
+}
+
 export interface ApiToken {
   id: string
   name: string

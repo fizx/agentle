@@ -75,6 +75,10 @@ func (s *Server) Handler() http.Handler {
 		r.Put("/configs", s.putConfig)
 		r.Delete("/configs/{id}", s.deleteConfig)
 
+		r.Get("/plugins", s.listPlugins)
+		r.Put("/plugins", s.putPlugin)
+		r.Delete("/plugins/{id}", s.deletePlugin)
+
 		r.Get("/secrets", s.listSecrets)
 		r.Put("/secrets", s.putSecret)
 		r.Delete("/secrets/{name}", s.deleteSecret)
@@ -436,6 +440,47 @@ func (s *Server) deleteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.svc.Store.DeleteToolConfig(r.Context(), chi.URLParam(r, "id")); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- plugins (admin) -------------------------------------------------------
+
+func (s *Server) listPlugins(w http.ResponseWriter, r *http.Request) {
+	plugins, err := s.svc.Store.ListPlugins(r.Context())
+	writeOrErr(w, plugins, err)
+}
+
+func (s *Server) putPlugin(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var p store.Plugin
+	if !readJSON(w, r, &p) {
+		return
+	}
+	if p.Name == "" {
+		httpError(w, http.StatusBadRequest, "name required")
+		return
+	}
+	if p.ID == "" {
+		p.ID = "pl_" + uuid.NewString()
+		p.Enabled = true
+	}
+	if err := s.svc.Store.PutPlugin(r.Context(), p); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) deletePlugin(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	if err := s.svc.Store.DeletePlugin(r.Context(), chi.URLParam(r, "id")); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
