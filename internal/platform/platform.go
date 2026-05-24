@@ -15,6 +15,7 @@ import (
 	"github.com/kylemaxwell/agentle/internal/caps"
 	"github.com/kylemaxwell/agentle/internal/engine"
 	"github.com/kylemaxwell/agentle/internal/pricing"
+	"github.com/kylemaxwell/agentle/internal/secrets"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/kylemaxwell/agentle/internal/vm"
 )
@@ -38,6 +39,7 @@ type Service struct {
 	Cfg     Config
 	LogSink caps.LogSink
 	Pricing *pricing.Service // optional; nil => cost recorded as $0
+	Secrets secrets.Store    // pluggable secret backend (defaults to SQLite)
 
 	resumeMu sync.Mutex          // guards resuming
 	resuming map[string]struct{} // executions with a resume in flight (dedup)
@@ -51,6 +53,7 @@ func New(st *store.Store, log engine.Log, leaser engine.Leaser, pool engine.Sand
 	return &Service{
 		Store: st, Log: log, Leaser: leaser, Pool: pool, KV: kv, Inbox: inbox,
 		Runner: &vm.Runner{}, Cfg: cfg, LogSink: sink,
+		Secrets:  secrets.SQLite(st),
 		resuming: make(map[string]struct{}),
 	}
 }
@@ -124,7 +127,7 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 		}
 		var secret string
 		if cfg.SecretRef != "" {
-			secret, err = s.Store.ResolveSecret(ctx, cfg.SecretRef, scriptID)
+			secret, err = s.Secrets.Resolve(ctx, cfg.SecretRef, scriptID)
 			if err != nil {
 				return nil, fmt.Errorf("config %q secret %q: %w", cfg.ID, cfg.SecretRef, err)
 			}

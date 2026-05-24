@@ -20,6 +20,7 @@ import (
 	"github.com/kylemaxwell/agentle/internal/platform"
 	"github.com/kylemaxwell/agentle/internal/pricing"
 	"github.com/kylemaxwell/agentle/internal/sandbox"
+	"github.com/kylemaxwell/agentle/internal/secrets"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/kylemaxwell/agentle/internal/trigger"
 	"github.com/kylemaxwell/agentle/web"
@@ -59,6 +60,20 @@ func run(addr, dataDir string, log *slog.Logger) error {
 	svc := platform.New(st, st.EventLog(leaser), leaser, pool, st.KV(), st.Inbox(), sink, platform.Config{})
 	prices := pricing.New()
 	svc.Pricing = prices
+	// Secret backend: Vault when VAULT_ADDR is set, else the default SQLite store.
+	if addr := os.Getenv("VAULT_ADDR"); addr != "" {
+		vault, err := secrets.Vault(secrets.VaultConfig{
+			Addr:   addr,
+			Token:  os.Getenv("VAULT_TOKEN"),
+			Mount:  os.Getenv("VAULT_KV_MOUNT"),
+			Prefix: os.Getenv("VAULT_PREFIX"),
+		})
+		if err != nil {
+			return err
+		}
+		svc.Secrets = vault
+		log.Info("using Vault secret backend", "addr", addr)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

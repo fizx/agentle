@@ -424,7 +424,7 @@ func (s *Server) listConfigs(w http.ResponseWriter, r *http.Request) {
 	for _, c := range configs {
 		present := true // no secret ref => nothing to flag
 		if c.SecretRef != "" {
-			present, _ = s.svc.Store.SecretExists(r.Context(), c.SecretRef, store.ScopeGlobal)
+			present, _ = s.svc.Secrets.Exists(r.Context(), c.SecretRef, store.ScopeGlobal)
 		}
 		out = append(out, configView{ToolConfig: c, SecretPresent: present})
 	}
@@ -478,7 +478,7 @@ func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	names, err := s.svc.Store.ListSecretNames(r.Context(), scope)
+	names, err := s.svc.Secrets.ListNames(r.Context(), scope)
 	writeOrErr(w, map[string]any{"names": names, "scope": scope}, err)
 }
 
@@ -498,7 +498,7 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "name required")
 		return
 	}
-	if err := s.svc.Store.PutSecret(r.Context(), body.Name, scope, body.Value); err != nil {
+	if err := s.svc.Secrets.Put(r.Context(), body.Name, scope, body.Value); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -510,7 +510,7 @@ func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.svc.Store.DeleteSecret(r.Context(), chi.URLParam(r, "name"), scope); err != nil {
+	if err := s.svc.Secrets.Delete(r.Context(), chi.URLParam(r, "name"), scope); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
