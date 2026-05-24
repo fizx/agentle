@@ -104,7 +104,7 @@ def main(input):
     history = [{"role": "system", "content": "You are a helpful agent."}]
     turns = 0
     for _ in range(20):  # bounded
-        msg = recv(timeout=300)   # suspend up to 5 min for the next message
+        msg = deadline(300, lambda: recv())   # suspend up to 5 min for the next message
         if msg == None:
             break                 # timed out: end the session
         history.append({"role": "user", "content": msg.get("text", "")})

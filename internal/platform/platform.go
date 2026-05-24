@@ -107,6 +107,7 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 	if s.Inbox != nil {
 		env["inbox"] = caps.Inbox(s.Inbox, actorID)
 	}
+	var mcpServers []caps.MCPServer // accumulated across all mcp grants (multi-server)
 	for _, g := range grants {
 		cfg, err := s.Store.GetToolConfig(ctx, g.ConfigID)
 		if err != nil {
@@ -119,6 +120,19 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 				return nil, fmt.Errorf("config %q secret %q: %w", cfg.ID, cfg.SecretRef, err)
 			}
 		}
+		if g.Capability == "mcp" {
+			var c struct {
+				Endpoint string `json:"endpoint"`
+				Name     string `json:"name"`
+			}
+			_ = json.Unmarshal(cfg.Config, &c)
+			name := c.Name
+			if name == "" {
+				name = cfg.ID
+			}
+			mcpServers = append(mcpServers, caps.MCPServer{Name: name, Endpoint: c.Endpoint, APIKey: secret})
+			continue
+		}
 		exe, err := buildExecutor(g.Capability, cfg, secret)
 		if err != nil {
 			return nil, err
@@ -126,6 +140,12 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 		if exe != nil {
 			env[g.Capability] = exe
 		}
+	}
+	// Register the MCP router only when at least one server is granted, so an
+	// ungranted mcp_list_tools() returns "not granted" (which the builtin turns
+	// into an empty list) rather than emitting an empty RPC for every script.
+	if len(mcpServers) > 0 {
+		env["mcp"] = caps.MCPRouter(mcpServers)
 	}
 	return env, nil
 }
@@ -165,12 +185,6 @@ func buildExecutor(capability string, cfg *store.ToolConfig, secret string) (eng
 		}
 		_ = json.Unmarshal(cfg.Config, &c)
 		return caps.LLM(caps.LLMConfig{BaseURL: c.BaseURL, APIKey: secret, Model: c.Model}), nil
-	case "mcp":
-		var c struct {
-			Endpoint string `json:"endpoint"`
-		}
-		_ = json.Unmarshal(cfg.Config, &c)
-		return caps.MCP(caps.MCPConfig{Endpoint: c.Endpoint, APIKey: secret}), nil
 	case "shell":
 		// Provisioned as a sandbox by the engine; no Environment executor.
 		return nil, nil

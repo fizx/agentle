@@ -15,6 +15,34 @@ var groupSystem = []Builtin{
 	{Name: "sleep", Group: "system", Doc: "sleep(seconds): pause (capped, memoized)", Fn: bSleep},
 	{Name: "rand", Group: "system", Doc: "rand() -> float: seeded random in [0,1)", Fn: bRand},
 	{Name: "rand_int", Group: "system", Doc: "rand_int(n) -> int: seeded random in [0,n)", Fn: bRandInt},
+	{Name: "deadline", Group: "system", Doc: "deadline(seconds, fn) -> fn(): run fn with a suspension deadline; recv() inside returns None once it passes", Fn: bDeadline},
+}
+
+// bDeadline runs fn with an ambient suspension deadline of `seconds` from now. Any
+// recv() during fn (the soonest enclosing deadline wins) suspends only until that
+// absolute time, then returns None. The deadline is anchored on a memoized now(),
+// so it is identical across suspend/resume.
+func bDeadline(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var seconds starlark.Value
+	var fn starlark.Callable
+	if err := starlark.UnpackArgs("deadline", args, kwargs, "seconds", &seconds, "fn", &fn); err != nil {
+		return nil, err
+	}
+	secs, ok := starlark.AsFloat(seconds)
+	if !ok {
+		return nil, fmt.Errorf("deadline: seconds must be a number")
+	}
+	nowVal, err := callCap(t, "time", "now", map[string]any{}, true, false)
+	if err != nil {
+		return nil, err
+	}
+	var startNanos int64
+	if err := starlark.AsInt(nowVal, &startNanos); err != nil {
+		return nil, fmt.Errorf("deadline: %w", err)
+	}
+	pushDeadline(t, startNanos+int64(secs*float64(1e9)))
+	defer popDeadline(t)
+	return starlark.Call(t, fn, nil, nil)
 }
 
 func bLog(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, _ []starlark.Tuple) (starlark.Value, error) {

@@ -60,6 +60,7 @@ func bParallelMap(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, 
 			ct := &starlark.Thread{Name: fmt.Sprintf("%s#%d", t.Name, i)}
 			ct.SetLocal(tlMediator, children[i])
 			ct.SetLocal(tlCtx, ctx)
+			ct.SetLocal(tlDeadlines, deadlinesOf(t)) // inherit any enclosing deadline()
 			r, err := starlark.Call(ct, fn, starlark.Tuple{item}, nil)
 			results[i], errs[i] = r, err
 		}(i)

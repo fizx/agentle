@@ -19,7 +19,7 @@ def main(input):
     ws = input["workspace"]
     send(ws, {"i": 1})
     send(ws, {"i": 2})
-    return [recv(timeout=2)["i"], recv(timeout=2)["i"]]
+    return [recv()["i"], recv()["i"]]
 `
 	_, _ = s.Store.SaveVersion(ctx, "s1", src, "", nil)
 	exe, err := s.RunExecution(ctx, RunRequest{ScriptID: "s1", Kind: "dashboard"})
@@ -43,7 +43,7 @@ def main(input):
     if input["data"]["act"] == "send":
         send("mbox", {"hi": input["data"]["n"]})
         return "sent"
-    return recv(timeout=2)
+    return recv()
 `
 	_, _ = s.Store.SaveVersion(ctx, "s1", src, "", nil)
 
@@ -79,7 +79,7 @@ func TestInboxRecvTimeoutSuspendsThenReturnsNull(t *testing.T) {
 	_, _ = s.Store.CreateScript(ctx, "s1", "waiter", "u1")
 	src := `
 def main(input):
-    m = recv(timeout=0.2)
+    m = deadline(0.2, lambda: recv())
     return {"got": m}
 `
 	_, _ = s.Store.SaveVersion(ctx, "s1", src, "", nil)

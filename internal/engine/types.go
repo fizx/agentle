@@ -115,6 +115,10 @@ var (
 	// ErrNonDeterministic means a replayed call did not match the recorded event:
 	// the script is nondeterministic or drifted from its pinned version.
 	ErrNonDeterministic = errors.New("engine: nondeterministic replay")
+	// ErrNotGranted means a capability the script invoked is not in its granted
+	// environment. Surfaced as a CallError; errors.Is(err, ErrNotGranted) matches,
+	// so builtins can treat "not granted" gracefully (e.g. mcp_list_tools → empty).
+	ErrNotGranted = errors.New("capability not granted")
 	// ErrSuspend marks a run that yielded at a durable suspension point — e.g.
 	// recv() with no message waiting. It is NOT a failure: the engine parks the
 	// execution (StatusSuspended) and resumes it by replaying the log once its

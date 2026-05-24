@@ -32,6 +32,12 @@ func (e *CallError) Error() string {
 	return fmt.Sprintf("%s.%s: %s", e.Capability, e.Method, e.Msg)
 }
 
+// Is lets errors.Is(err, ErrNotGranted) match a not-granted CallError, so callers
+// can branch on it without string matching.
+func (e *CallError) Is(target error) bool {
+	return target == ErrNotGranted && e.Msg == ErrNotGranted.Error()
+}
+
 // Mediator is what every capability builtin calls to perform an RPC. It enforces
 // the memoization contract: a recorded Result is verified against the call and
 // returned without re-executing; a miss executes the bound Executor and records
@@ -160,7 +166,7 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 		exec, ok = shellExecutor{m.st.sb}, true
 	}
 	if !ok {
-		return nil, &CallError{Capability: inv.Capability, Method: inv.Method, Msg: "capability not granted"}
+		return nil, &CallError{Capability: inv.Capability, Method: inv.Method, Msg: ErrNotGranted.Error()}
 	}
 
 	// Miss. Write-ahead intent for non-idempotent calls so recovery knows a side

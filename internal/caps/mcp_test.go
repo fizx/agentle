@@ -51,11 +51,46 @@ func exercise(t *testing.T, ex engine.Executor) {
 }
 
 func TestMCPMockMode(t *testing.T) {
-	exercise(t, MCP(MCPConfig{})) // empty endpoint => offline mock
+	exercise(t, MCPRouter([]MCPServer{{Name: "demo"}})) // empty endpoint => offline mock
 }
 
 func TestMCPRealServer(t *testing.T) {
 	srv := httptest.NewServer(mcp.NewDemo())
 	defer srv.Close()
-	exercise(t, MCP(MCPConfig{Endpoint: srv.URL}))
+	exercise(t, MCPRouter([]MCPServer{{Name: "demo", Endpoint: srv.URL}}))
+}
+
+func TestMCPRouterMultiServerRouting(t *testing.T) {
+	srv := httptest.NewServer(mcp.NewDemo())
+	defer srv.Close()
+	ex := MCPRouter([]MCPServer{{Name: "a"}, {Name: "b", Endpoint: srv.URL}})
+	ctx := context.Background()
+
+	// list_tools tags each tool with its server.
+	raw, err := ex.Execute(ctx, engine.Invocation{Method: "list_tools", Args: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"server":"a"`) || !strings.Contains(string(raw), `"server":"b"`) {
+		t.Fatalf("tools not tagged by server: %s", raw)
+	}
+
+	// With multiple servers, calling without server= is an in-band error.
+	raw, _ = ex.Execute(ctx, engine.Invocation{Method: "call_tool", Args: json.RawMessage(`{"tool":"add","arguments":{"a":1,"b":1}}`)})
+	var amb mcpToolResult
+	_ = json.Unmarshal(raw, &amb)
+	if !amb.IsError {
+		t.Fatalf("expected ambiguous-server error, got %s", raw)
+	}
+
+	// Routing by explicit server works.
+	raw, err = ex.Execute(ctx, engine.Invocation{Method: "call_tool", Args: json.RawMessage(`{"tool":"add","arguments":{"a":1,"b":1},"server":"b"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r mcpToolResult
+	_ = json.Unmarshal(raw, &r)
+	if r.IsError || r.Text != "2" {
+		t.Fatalf("routed call result = %+v (%s)", r, raw)
+	}
 }

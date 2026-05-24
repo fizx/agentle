@@ -1,6 +1,11 @@
 package vm
 
-import "go.starlark.net/starlark"
+import (
+	"errors"
+
+	"github.com/kylemaxwell/agentle/internal/engine"
+	"go.starlark.net/starlark"
+)
 
 // groupNet: network capabilities. These require a granted tool config (http/llm);
 // an ungranted call fails with "capability not granted".
@@ -55,6 +60,24 @@ func bLLM(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs [
 			return nil, err
 		}
 		payload["tools"] = tv
+	} else if def, err := defaultMCPTools(t); err != nil {
+		return nil, err
+	} else if def != nil {
+		// No explicit tools: default to the tools implied by granted MCP servers.
+		payload["tools"] = def
 	}
 	return callCap(t, "llm", "chat", payload, true, false)
+}
+
+// defaultMCPTools returns the granted MCP servers' tools as the LLM's default tool
+// list, or nil when no MCP server is granted (so llm-only scripts add no RPC).
+func defaultMCPTools(t *starlark.Thread) (any, error) {
+	res, err := callCap(t, "mcp", "list_tools", map[string]any{}, true, false)
+	if err != nil {
+		if errors.Is(err, engine.ErrNotGranted) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return starlarkToGo(res)
 }

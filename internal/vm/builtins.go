@@ -84,10 +84,43 @@ func Catalog() []Builtin {
 
 // thread-local keys.
 const (
-	tlMediator = "agentle.mediator"
-	tlCtx      = "agentle.ctx"
-	tlSuspend  = "agentle.suspend" // holds an *engine.SuspendError when a call parked
+	tlMediator  = "agentle.mediator"
+	tlCtx       = "agentle.ctx"
+	tlSuspend   = "agentle.suspend"   // holds an *engine.SuspendError when a call parked
+	tlDeadlines = "agentle.deadlines" // stack of absolute (unix-nanos) suspension deadlines
 )
+
+// deadline stack: deadline(secs, fn) pushes an absolute deadline for the dynamic
+// extent of fn; recv() reads the soonest active deadline. Absolute deadlines are
+// derived from a memoized now(), so they're stable across suspend/resume.
+
+func deadlinesOf(t *starlark.Thread) []int64 {
+	d, _ := t.Local(tlDeadlines).([]int64)
+	return d
+}
+
+func pushDeadline(t *starlark.Thread, abs int64) {
+	t.SetLocal(tlDeadlines, append(append([]int64{}, deadlinesOf(t)...), abs))
+}
+
+func popDeadline(t *starlark.Thread) {
+	d := deadlinesOf(t)
+	if len(d) > 0 {
+		t.SetLocal(tlDeadlines, d[:len(d)-1])
+	}
+}
+
+// effectiveDeadline returns the soonest active deadline (0 = none), so a tighter
+// outer deadline still bounds an inner block.
+func effectiveDeadline(t *starlark.Thread) int64 {
+	var best int64
+	for _, d := range deadlinesOf(t) {
+		if d > 0 && (best == 0 || d < best) {
+			best = d
+		}
+	}
+	return best
+}
 
 func mediatorOf(t *starlark.Thread) engine.Mediator {
 	return t.Local(tlMediator).(engine.Mediator)
