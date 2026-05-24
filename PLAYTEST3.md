@@ -13,6 +13,12 @@
 
 ---
 
+> **Status (2026-05-23): all phases implemented.** Phases 1–6 below are built,
+> tested, and shipped (per-call plugins; the persistent/LRU plugin kind remains
+> the one deferred item, noted in Phase 5). See the README for usage.
+
+---
+
 # Plan (decided 2026-05-23)
 
 Decisions from the planning Q&A are folded in below. Items are grouped into phases

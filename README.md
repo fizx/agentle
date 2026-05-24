@@ -61,11 +61,58 @@ the dev `X-Agentle-User` header — real session/OAuth auth is still deferred.)
 ## MCP (Model Context Protocol)
 
 Scripts can use MCP tools two ways: **directly** (`mcp_call("add", {...})`) and as
-**LLM tools** (`llm(messages, tools=mcp_list_tools())` — the model returns
-`tool_calls`, the script runs each via `mcp_call`, and feeds results back). Grant
-an `mcp` tool config; with an empty `endpoint` it uses an in-process mock server
-(echo/add/upper) so it's playable offline, and a real JSON-RPC MCP server is also
-served at `/mcp`. See the `mcp_direct` and `mcp_agent` examples.
+**LLM tools** (`llm(messages, tools=mcp_list_tools())`, or just `llm(messages)` —
+it defaults to the granted MCP tools — the model returns `tool_calls`, the script
+runs each via `mcp_call`, and feeds results back). Grant one or more `mcp` tool
+configs; `mcp_list_tools()` returns the union (each tool tagged with its `server`)
+and is always allowed (empty when none granted). With an empty `endpoint` a config
+uses an in-process mock server (echo/add/upper) so it's playable offline; set
+`endpoint` for a real JSON-RPC server (one is also served at `/mcp`), or
+`plugin_id` to back it with a **capability plugin**. See the `mcp_direct`,
+`mcp_agent`, and `plugin_tool` examples.
+
+## Capability plugins
+
+A **plugin** (Settings → Plugins, admin) is a small program — Python, Node, or
+Bash — that agentle runs **in the sandbox** to provide MCP tools. Convention:
+`argv[1]="list"` prints the tool catalog as JSON; `"call"` with the tool name +
+args-JSON prints the result. Grant it to a script via an `mcp` tool config whose
+JSON is `{"plugin_id": "<id>"}`; its tools then behave like any MCP server. Plugins
+run per-call (stateless, memoized like any RPC) under the script's grants and the
+sandbox's egress.
+
+## Cost tracking
+
+Each `llm()` call records token usage; cost is priced from OpenRouter (cached,
+refreshed in the background, offline-safe). The trace shows per-call and total
+cost, and the **Spend** view rolls up by run / script / workspace / user / model
+over a time window (RBAC-scoped). Pricing is computed out-of-band, never as an
+in-VM RPC, so it doesn't affect deterministic replay.
+
+## Interactive UI (chat & forms)
+
+A script can declare a panel and drive it from the dashboard:
+
+```python
+def main(input):
+    ui_chat(title="Echo bot")
+    for _ in range(100):
+        msg = recv()            # durably suspend until the user sends
+        if msg == None: break
+        ui_say("**" + msg["text"].upper() + "**")   # markdown + typed blocks
+```
+
+`ui_form([field(...), ...])` shows a form and returns the submitted values. The
+panel exchanges messages with the run over the actor inbox (`POST
+/api/executions/{id}/messages`), and the run durably suspends between turns — so a
+chat can live indefinitely while idle. See the `chat_ui` and `form_ui` examples.
+
+## Pluggable secrets
+
+Secret storage is behind a `SecretStore` interface: SQLite by default, or
+**HashiCorp Vault** (KV v2) when `VAULT_ADDR`/`VAULT_TOKEN` are set. Secrets stay
+write-only — values bind to tool configs at the RPC boundary and never reach
+scripts or traces.
 
 ## Script API
 
@@ -78,16 +125,20 @@ Capabilities (all memoized RPCs unless noted):
 | `now()`, `sleep(seconds)` | system | deterministic time |
 | `rand()`, `rand_int(n)` | system | seeded per execution |
 | `store(k,v)`, `fetch(k)`, `keys(prefix)` | system | per-**workspace** durable store (`load` is a reserved Starlark keyword, hence `fetch`) |
-| `send(workspace, data)`, `recv(timeout=)` | system | actor messaging; `recv` is the blocking "yield" point |
+| `send(workspace, data)`, `recv()` | system | actor messaging; `recv` is the durable "yield" point |
+| `deadline(seconds, fn)` | system | run `fn` with a suspension deadline; `recv()` inside returns `None` once it passes |
 | `http_get(url, headers={})`, `http_post(url, body, headers={})` | `http` grant | SSRF-guarded, domain allowlist |
-| `llm(messages, model=, temperature=, tools=)` | `llm` grant | OpenAI chat format; `tools=` enables tool use (accepts MCP tool defs) |
-| `mcp_list_tools()`, `mcp_call(tool, args={})` | `mcp` grant | Model Context Protocol client (direct calls + LLM tool use) |
+| `llm(messages, model=, temperature=, tools=)` | `llm` grant | OpenAI chat format; defaults `tools=` to granted MCP tools |
+| `mcp_list_tools()`, `mcp_call(tool, args={}, server=)` | `mcp` grant | MCP client over one or more servers (`mcp_list_tools` is always allowed — empty if none) |
+| `ui_chat()`, `ui_say(text)`, `ui_form(fields)`, `field(...)` | system | interactive chat/form panel driven from the dashboard |
 | `shell(argv, dir=, env=)` | `shell` grant | runs in a per-workspace sandbox home dir |
 | `parallel_map(fn, items, max_concurrency=4)` | system | structured concurrency, replay-safe |
 
 `recv()` is a **durable suspension point**: with an empty inbox the execution
 parks (status `suspended`) — no goroutine blocks — and the engine resumes it by
-replay when a message arrives at its workspace or its `timeout` deadline passes.
+replay when a message arrives at its workspace. Bound the wait with
+`deadline(seconds, fn)` (a block-scoped deadline; the soonest enclosing one wins),
+which is anchored on a memoized `now()` so it survives the suspend.
 
 The full stdlib catalog (with one-line docs) is served at `/api/capabilities` and
 drives the editor's autocomplete. A capability the script's version hasn't been
@@ -148,6 +199,8 @@ internal/store      SQLite data model + durable event log + KV + inbox
 internal/platform   resolves capability env from grants; runs; projects traces
 internal/api        chi control-plane REST + public /v1 API + webhook routes + SPA
 internal/mcp        minimal Model Context Protocol server (JSON-RPC) + demo tools
+internal/pricing    OpenRouter price table (cached) for LLM cost tracking
+internal/secrets    pluggable SecretStore (SQLite default, Vault provider)
 internal/trigger    trigger-kind registry + cron scheduler
 internal/examples   starter-script catalog (gallery + seeding)
 web                 vite + react + codemirror dashboard in TypeScript (embedded)
@@ -191,9 +244,10 @@ would be the upgrade path.
 
 This is a playable MVP. Deliberately deferred from the full vision: prod
 kata+Firecracker sandbox, Redis/Postgres event-log tiers, the egress proxy
-(Path B), OTLP export to an external collector, and **real authentication** — the
-dashboard identity is a trusted `X-Agentle-User` header (RBAC on top is real;
-the `/v1` API uses real bearer tokens, but passwords/OAuth/sessions for the
-dashboard are not built yet). Durable `recv()` suspension and its timer deadlines
-are implemented; the resume dispatcher is an in-process ticker (a distributed
-deployment would drive it from the event/timer tiers).
+(Path B), OTLP export to an external collector, the **persistent (LRU) plugin**
+kind (per-call plugins are built; persistent needs a sandbox session primitive),
+and **real authentication** — the dashboard identity is a trusted `X-Agentle-User`
+header (RBAC on top is real; the `/v1` API uses real bearer tokens, but
+passwords/OAuth/sessions for the dashboard are not built yet). The resume
+dispatcher is an in-process ticker (a distributed deployment would drive it from
+the event/timer tiers).

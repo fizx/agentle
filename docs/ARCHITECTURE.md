@@ -21,9 +21,12 @@ internal/
                      from grants, builds the event envelope, runs, projects traces.
                      resume.go is the dispatcher that wakes durably-suspended runs.
   mcp/               minimal Model Context Protocol server (JSON-RPC) + demo tools.
+  pricing/           OpenRouter price table (cached) for LLM cost tracking.
+  secrets/           pluggable SecretStore: SQLite default + HashiCorp Vault.
   trigger/           trigger kinds (registry.go) + the cron scheduler.
   examples/          starter-script catalog (the dashboard gallery + seeding).
-  api/               control-plane HTTP + public /v1 token API + webhook routes + SPA.
+  api/               control-plane HTTP + public /v1 token API + UI/messages +
+                     spend + plugins + webhook routes + SPA.
 web/                 TypeScript + React dashboard (embedded into the binary).
 ```
 
@@ -84,6 +87,20 @@ A `recv(timeout=)` deadline is anchored on a memoized `now()` so it is stable
 across suspend/resume. To keep a new capability suspend-capable, return
 `*engine.SuspendError` and make the call idempotent (no write-ahead intent), so a
 resume re-runs it cleanly.
+
+## Interactive UI, plugins, cost (where things live)
+
+- **Interactive UI** (`caps/ui.go`, `vm/std_ui.go`, `platform/ui.go`): the `ui`
+  capability echoes its args into the (memoized) result; `platform.GetUI` projects
+  those results + inbox recv results into a chat/form transcript. The panel posts
+  to `POST /executions/{id}/messages` → `send` into the workspace → resume. UI runs
+  are just durably-suspending actors with a rendered front end.
+- **Capability plugins** (`store/plugin.go`, `caps/mcp.go` PluginSpec): a plugin is
+  an MCP server backed by a sandboxed subprocess (`pluginArgv` builds the per-call
+  command). Wired in via an `mcp` tool config with `plugin_id`.
+- **Cost** (`pricing/`, `platform/cost.go`): token usage lives in the memoized llm
+  result; cost is derived out-of-band (never an in-VM RPC) at completion (usage
+  rows) and trace projection. Keep it that way — pricing must not affect replay.
 
 ## fs snapshot policy
 
