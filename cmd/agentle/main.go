@@ -18,6 +18,7 @@ import (
 	"github.com/kylemaxwell/agentle/internal/api"
 	"github.com/kylemaxwell/agentle/internal/engine"
 	"github.com/kylemaxwell/agentle/internal/platform"
+	"github.com/kylemaxwell/agentle/internal/pricing"
 	"github.com/kylemaxwell/agentle/internal/sandbox"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/kylemaxwell/agentle/internal/trigger"
@@ -56,6 +57,8 @@ func run(addr, dataDir string, log *slog.Logger) error {
 	leaser := engine.NewMemLeaser()
 	sink := func(exec engine.ExecutionID, msg string) { log.Info("script.log", "exec", string(exec), "msg", msg) }
 	svc := platform.New(st, st.EventLog(leaser), leaser, pool, st.KV(), st.Inbox(), sink, platform.Config{})
+	prices := pricing.New()
+	svc.Pricing = prices
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -66,6 +69,8 @@ func run(addr, dataDir string, log *slog.Logger) error {
 	// The dispatcher resumes durably-suspended executions when their inbox gets a
 	// message or their wake deadline passes; it also recovers parked runs at boot.
 	go svc.RunDispatcher(ctx, 500*time.Millisecond, log)
+	// Keep the OpenRouter price table warm for cost tracking (best-effort/offline-safe).
+	go prices.RefreshLoop(ctx)
 
 	sched := trigger.NewScheduler(st, svc, log)
 	if err := sched.Reload(ctx); err != nil {

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useState } from 'react'
 import Scripts from './views/Scripts'
 import Runs from './views/Runs'
 import Settings from './views/Settings'
+import Spend from './views/Spend'
 import Users from './views/Users'
 import { api, setUserId } from './api'
 import type { User } from './types'
 
-type Tab = 'scripts' | 'runs' | 'settings' | 'users'
+type Tab = 'scripts' | 'runs' | 'spend' | 'settings' | 'users'
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('scripts')
@@ -26,7 +27,9 @@ export default function App() {
   const switchUser = (id: string) => { setUserId(id); window.location.reload() }
 
   const isAdmin = me?.role === 'admin'
-  const tabs: Tab[] = isAdmin ? ['scripts', 'runs', 'settings', 'users'] : ['scripts', 'runs', 'settings']
+  const tabs: Tab[] = isAdmin
+    ? ['scripts', 'runs', 'spend', 'settings', 'users']
+    : ['scripts', 'runs', 'spend', 'settings']
 
   return (
     <>
@@ -49,6 +52,7 @@ export default function App() {
       </div>
       {tab === 'scripts' && <Scripts onOpenRun={openRun} />}
       {tab === 'runs' && <Runs focusExec={focusExec} clearFocus={() => setFocusExec(null)} />}
+      {tab === 'spend' && <Spend />}
       {tab === 'settings' && <Settings />}
       {tab === 'users' && <Users onChange={loadIdentity} me={me} />}
     </>

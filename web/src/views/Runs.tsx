@@ -4,6 +4,7 @@ import type { Execution, Trace } from '../types'
 import { StatusBadge } from '../components/Badge'
 import { Json } from '../components/Json'
 import { TraceTimeline } from '../components/TraceTimeline'
+import { fmtUSD } from './Spend'
 
 export default function Runs({ focusExec, clearFocus }: { focusExec: string | null; clearFocus: () => void }) {
   const [execs, setExecs] = useState<Execution[]>([])
@@ -65,7 +66,10 @@ export default function Runs({ focusExec, clearFocus }: { focusExec: string | nu
 
             <div className="card">
               <div className="row spread">
-                <h3>Trace ({trace ? trace.spans.length : 0} events)</h3>
+                <h3>
+                  Trace ({trace ? trace.spans.length : 0} events)
+                  {trace && trace.cost_usd > 0 && <span className="muted" style={{ marginLeft: 8, fontWeight: 400 }}>· {fmtUSD(trace.cost_usd)}</span>}
+                </h3>
                 <div className="tabs">
                   <button className={view === 'timeline' ? 'active' : ''} onClick={() => setView('timeline')}>Timeline</button>
                   <button className={view === 'events' ? 'active' : ''} onClick={() => setView('events')}>Events</button>
@@ -88,6 +92,11 @@ export default function Runs({ focusExec, clearFocus }: { focusExec: string | nu
                           {sp.error
                             ? <span className="err">{sp.error}</span>
                             : <span className="muted">{truncate(sp.result || sp.snapshot || '', 160)}</span>}
+                          {sp.capability === 'llm' && (sp.input_tokens || sp.output_tokens) ? (
+                            <span className="muted" style={{ fontSize: 11 }}>
+                              {' '}· {sp.input_tokens || 0}/{sp.output_tokens || 0} tok{sp.cost_usd ? ' · ' + fmtUSD(sp.cost_usd) : ''}
+                            </span>
+                          ) : null}
                         </td>
                       </tr>
                     ))}

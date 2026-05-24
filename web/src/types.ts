@@ -78,11 +78,30 @@ export interface Span {
   result?: string
   error?: string
   snapshot?: string
+  model?: string
+  input_tokens?: number
+  output_tokens?: number
+  cost_usd?: number
 }
 
 export interface Trace {
   execution: string
   spans: Span[]
+  cost_usd: number
+}
+
+export interface SpendRow {
+  key: string
+  calls: number
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+}
+
+export interface Spend {
+  by: string
+  rows: SpendRow[]
+  total_cost_usd: number
 }
 
 export interface Capability {

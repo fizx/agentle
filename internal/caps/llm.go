@@ -52,12 +52,12 @@ func LLM(cfg LLMConfig) engine.Executor {
 			return nil, err
 		}
 		tools := normalizeTools(a.Tools)
-		if mock {
-			return mockChat(a.Messages, tools)
-		}
 		model := a.Model
 		if model == "" {
 			model = cfg.Model
+		}
+		if mock {
+			return mockChat(a.Messages, tools, model)
 		}
 		body := map[string]any{
 			"model":       model,
@@ -86,6 +86,7 @@ func LLM(cfg LLMConfig) engine.Executor {
 			return nil, fmt.Errorf("llm: upstream status %d: %s", resp.StatusCode, truncate(string(data), 300))
 		}
 		var parsed struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Message struct {
 					Role      string `json:"role"`
@@ -107,8 +108,14 @@ func LLM(cfg LLMConfig) engine.Executor {
 		if len(parsed.Choices) == 0 {
 			return nil, fmt.Errorf("llm: empty response")
 		}
+		usedModel := parsed.Model
+		if usedModel == "" {
+			usedModel = model
+		}
 		msg := parsed.Choices[0].Message
-		out := map[string]any{"role": msg.Role, "content": msg.Content, "usage": parsed.Usage}
+		// model + usage travel in the memoized result so cost can be derived later
+		// (out of the VM) without re-calling the provider.
+		out := map[string]any{"role": msg.Role, "content": msg.Content, "usage": parsed.Usage, "model": usedModel}
 		if len(msg.ToolCalls) > 0 {
 			calls := make([]map[string]any, 0, len(msg.ToolCalls))
 			for _, tc := range msg.ToolCalls {
@@ -203,33 +210,50 @@ var intRe = regexp.MustCompile(`-?\d+(?:\.\d+)?`)
 // mockChat is the offline provider. With tools present it demonstrates a full
 // tool-use loop deterministically: it requests the first tool (filling arguments
 // from the user's text by a small heuristic), then, once it sees the tool result,
-// returns a final answer echoing it.
-func mockChat(messages []map[string]any, tools []map[string]any) (json.RawMessage, error) {
+// returns a final answer echoing it. It reports estimated token usage (priced at
+// $0 — the "mock" model has no price) so the spend UI shows counts offline.
+func mockChat(messages []map[string]any, tools []map[string]any, model string) (json.RawMessage, error) {
 	lastRole, lastContent, lastUser := scanMessages(messages)
+	if model == "" {
+		model = "mock"
+	}
+	reply := func(content string, toolCalls []map[string]any) (json.RawMessage, error) {
+		out := map[string]any{
+			"role": "assistant", "content": content, "model": model,
+			"usage": mockUsage(messages, content),
+		}
+		if toolCalls != nil {
+			out["tool_calls"] = toolCalls
+		}
+		return json.Marshal(out)
+	}
 
 	if len(tools) > 0 && lastRole != "tool" {
 		name := pickTool(tools, lastUser)
-		return json.Marshal(map[string]any{
-			"role":    "assistant",
-			"content": "",
-			"usage":   map[string]any{"mock": true},
-			"tool_calls": []map[string]any{
-				{"id": "call_1", "name": name, "arguments": guessArgs(name, lastUser)},
-			},
-		})
+		return reply("", []map[string]any{{"id": "call_1", "name": name, "arguments": guessArgs(name, lastUser)}})
 	}
 	if lastRole == "tool" {
-		return json.Marshal(map[string]any{
-			"role":    "assistant",
-			"content": "[mock] result: " + lastContent,
-			"usage":   map[string]any{"mock": true},
-		})
+		return reply("[mock] result: "+lastContent, nil)
 	}
 	content := "[mock] " + truncate(lastUser, 200)
 	if lastUser == "" {
 		content = "[mock] (no user content)"
 	}
-	return json.Marshal(map[string]any{"role": "assistant", "content": content, "usage": map[string]any{"mock": true}})
+	return reply(content, nil)
+}
+
+// mockUsage estimates token counts (~4 chars/token) so token tracking is visible
+// in the offline mock; the "mock" model is unpriced, so cost stays $0.
+func mockUsage(messages []map[string]any, reply string) map[string]any {
+	in := 0
+	for _, m := range messages {
+		if c, ok := m["content"].(string); ok {
+			in += len([]rune(c))
+		}
+	}
+	in /= 4
+	out := len([]rune(reply)) / 4
+	return map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out, "mock": true}
 }
 
 // scanMessages returns the last message's role and content, plus the last user

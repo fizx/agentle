@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kylemaxwell/agentle/internal/caps"
 	"github.com/kylemaxwell/agentle/internal/engine"
+	"github.com/kylemaxwell/agentle/internal/pricing"
 	"github.com/kylemaxwell/agentle/internal/store"
 	"github.com/kylemaxwell/agentle/internal/vm"
 )
@@ -36,6 +37,7 @@ type Service struct {
 	Runner  engine.Runner
 	Cfg     Config
 	LogSink caps.LogSink
+	Pricing *pricing.Service // optional; nil => cost recorded as $0
 
 	resumeMu sync.Mutex          // guards resuming
 	resuming map[string]struct{} // executions with a resume in flight (dedup)
@@ -73,9 +75,16 @@ func (s *Service) Resolve(ctx context.Context, exec engine.ExecutionID) (engine.
 	return engine.ExecutionSpec{Source: v.Source, Image: v.Image, Input: e.Input, Env: env}, nil
 }
 
-// SetStatus implements engine.Resolver.
+// SetStatus implements engine.Resolver. On completion it records token usage +
+// cost for the run's LLM calls (best-effort; never fails the run).
 func (s *Service) SetStatus(ctx context.Context, exec engine.ExecutionID, status engine.Status, output json.RawMessage, errMsg string) error {
-	return s.Store.SetExecutionStatus(ctx, string(exec), int(status), output, errMsg)
+	if err := s.Store.SetExecutionStatus(ctx, string(exec), int(status), output, errMsg); err != nil {
+		return err
+	}
+	if status == engine.StatusCompleted {
+		s.recordUsage(ctx, string(exec))
+	}
+	return nil
 }
 
 // Suspend implements engine.Resolver: it marks the execution suspended and records

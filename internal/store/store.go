@@ -290,6 +290,21 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   last_used_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_token_user ON api_tokens(user_id);
+CREATE TABLE IF NOT EXISTS usage (
+  exec TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  script_id TEXT NOT NULL DEFAULT '',
+  workspace TEXT NOT NULL DEFAULT '',
+  owner TEXT NOT NULL DEFAULT '',
+  model TEXT NOT NULL DEFAULT '',
+  input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_tokens INTEGER NOT NULL DEFAULT 0,
+  cost_usd REAL NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (exec, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
 `
 
 func now() int64 { return time.Now().UnixNano() }

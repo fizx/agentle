@@ -21,12 +21,19 @@ type Span struct {
 	Result     string     `json:"result,omitempty"` // preview of the memoized result
 	Error      string     `json:"error,omitempty"`
 	Snapshot   string     `json:"snapshot,omitempty"`
+
+	// LLM cost attributes (set on llm result spans; derived out-of-band).
+	Model        string  `json:"model,omitempty"`
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
 }
 
-// Trace is the ordered span list for an execution.
+// Trace is the ordered span list for an execution, with a total cost rollup.
 type Trace struct {
-	Execution string `json:"execution"`
-	Spans     []Span `json:"spans"`
+	Execution string  `json:"execution"`
+	Spans     []Span  `json:"spans"`
+	CostUSD   float64 `json:"cost_usd"`
 }
 
 const previewLimit = 2000
@@ -48,6 +55,18 @@ func (s *Service) GetTrace(ctx context.Context, exec string) (*Trace, error) {
 			sp.Error = ev.RPC.Err
 			if len(ev.RPC.Result) > 0 {
 				sp.Result = preview(ev.RPC.Result)
+				if ev.RPC.Capability == "llm" {
+					var r llmResultUsage
+					if json.Unmarshal(ev.RPC.Result, &r) == nil {
+						sp.Model = r.Model
+						sp.InputTokens = r.Usage.PromptTokens
+						sp.OutputTokens = r.Usage.CompletionTokens
+						if s.Pricing != nil {
+							sp.CostUSD = s.Pricing.Cost(r.Model, sp.InputTokens, sp.OutputTokens)
+						}
+						t.CostUSD += sp.CostUSD
+					}
+				}
 			}
 		case ev.Snapshot != nil:
 			sp.Snapshot = string(ev.Snapshot.Key)

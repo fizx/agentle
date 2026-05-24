@@ -69,6 +69,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/executions/{id}", s.getExecution)
 		r.Get("/executions/{id}/trace", s.getTrace)
 
+		r.Get("/spend", s.spend)
+
 		r.Get("/configs", s.listConfigs)
 		r.Put("/configs", s.putConfig)
 		r.Delete("/configs/{id}", s.deleteConfig)
@@ -381,6 +383,26 @@ func (s *Server) execIfVisible(w http.ResponseWriter, r *http.Request, id string
 		}
 	}
 	return exe
+}
+
+// spend rolls up token usage + cost by dimension. Non-admins see only their own
+// scripts' spend. Query: ?by=script|workspace|user|model|exec&since=<unix-nanos>.
+func (s *Server) spend(w http.ResponseWriter, r *http.Request) {
+	by := r.URL.Query().Get("by")
+	if by == "" {
+		by = "script"
+	}
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	rows, err := s.svc.Store.Spend(r.Context(), by, visibilityOwner(r), since)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var total float64
+	for _, row := range rows {
+		total += row.CostUSD
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"by": by, "rows": rows, "total_cost_usd": total})
 }
 
 // --- configs & secrets -----------------------------------------------------

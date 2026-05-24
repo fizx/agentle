@@ -1,5 +1,5 @@
 import type {
-  ApiToken, Capability, Example, Execution, Script, ScriptDetail, ToolConfig, Trace, Trigger, User, Version,
+  ApiToken, Capability, Example, Execution, Script, ScriptDetail, Spend, ToolConfig, Trace, Trigger, User, Version,
 } from './types'
 
 const USER_KEY = 'agentle.user'
@@ -54,6 +54,7 @@ export const api = {
     req<Execution[]>('GET', '/executions' + qs({ script, limit, offset })),
   getExecution: (id: string) => req<Execution>('GET', `/executions/${id}`),
   getTrace: (id: string) => req<Trace>('GET', `/executions/${id}/trace`),
+  spend: (by: string, since?: number) => req<Spend>('GET', '/spend' + qs({ by, since })),
 
   listConfigs: () => req<ToolConfig[]>('GET', '/configs'),
   putConfig: (c: Partial<ToolConfig>) => req<{ id: string }>('PUT', '/configs', c),
