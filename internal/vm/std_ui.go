@@ -8,9 +8,11 @@ import (
 // dashboard renders a panel and exchanges messages with the run over the actor
 // inbox (the panel send()s, the script recv()s). ui_say appends to the transcript.
 var groupUI = []Builtin{
-	{Name: "ui_chat", Group: "ui", Doc: "ui_chat(title='', intro=''): open a chat panel for this run (drive with recv()/ui_say())", Fn: bUIChat},
+	{Name: "ui_chat", Group: "ui", Doc: "ui_chat(title='', intro=''): push a chat panel (drive with recv()/ui_say())", Fn: bUIChat},
 	{Name: "ui_say", Group: "ui", Doc: "ui_say(text, role='assistant', blocks=None): append a message to the UI transcript (markdown + typed blocks)", Fn: bUISay},
-	{Name: "ui_form", Group: "ui", Doc: "ui_form(fields) -> values: show a form and suspend until the user submits it", Fn: bUIForm},
+	{Name: "ui_form", Group: "ui", Doc: "ui_form(fields) -> values: push a form (modal over any chat), suspend until submitted, then pop it", Fn: bUIForm},
+	{Name: "ui_pop", Group: "ui", Doc: "ui_pop(): pop the top UI panel off the stack", Fn: bUIPop},
+	{Name: "ui_clear", Group: "ui", Doc: "ui_clear(): remove all UI panels", Fn: bUIClear},
 	{Name: "field", Group: "ui", Doc: "field(name, label='', type='text', options=None, required=False, default=None) -> dict: a form field spec", Fn: bField},
 }
 
@@ -61,7 +63,35 @@ func bUIForm(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwarg
 		return nil, err
 	}
 	// Suspend until the user submits the form (delivered as an inbox message).
-	return callCap(t, "inbox", "recv", map[string]any{"deadline": effectiveDeadline(t)}, true, false)
+	res, err := callCap(t, "inbox", "recv", map[string]any{"deadline": effectiveDeadline(t)}, true, false)
+	if err != nil {
+		return nil, err
+	}
+	// Auto-dismiss the form panel now that it's been submitted.
+	if _, err := callCap(t, "ui", "pop", map[string]any{"kind": "pop"}, true, false); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func bUIPop(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs("ui_pop", args, kwargs); err != nil {
+		return nil, err
+	}
+	if _, err := callCap(t, "ui", "pop", map[string]any{"kind": "pop"}, true, false); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+func bUIClear(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs("ui_clear", args, kwargs); err != nil {
+		return nil, err
+	}
+	if _, err := callCap(t, "ui", "clear", map[string]any{"kind": "clear"}, true, false); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
 }
 
 func bField(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {

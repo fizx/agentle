@@ -132,23 +132,33 @@ def main(input):
 	},
 	{
 		ID:           "chat_ui",
-		Title:        "Chat UI",
-		Description:  "Running this from the dashboard opens a chat panel; the script recv()s your messages and ui_say()s replies.",
-		Capabilities: []string{},
-		Source: `# Run from the dashboard to open a chat panel. recv() durably suspends between
-# messages; ui_say() appends to the transcript (markdown supported).
+		Title:        "Chat assistant (LLM)",
+		Description:  "An LLM-backed chat app. ui_chat() only renders the panel — the script defines the behavior, so edit the system prompt or the loop to build any chat.",
+		Capabilities: []string{"llm"},
+		Source: `# A chat app. ui_chat() is NOT magic: it just opens the panel. The script drives
+# the conversation — here by calling llm() each turn. Swap the system prompt
+# (pass data.system) or the whole loop to build any chat you like.
 def main(input):
-    ui_chat(title="Echo bot", intro="Say something — I'll shout it back. Send /quit to end.")
+    data = input.get("data") or {}
+    system = data.get("system") or "You are a concise, friendly assistant."
+    ui_chat(title=data.get("title") or "Assistant",
+            intro="Ask me anything. Send /quit to end.")
+    history = [{"role": "system", "content": system}]
+    turns = 0
     for _ in range(100):
-        msg = recv()                  # suspend until the user sends
+        msg = recv()                  # durably suspend until the user sends
         if msg == None:
             break
         text = (msg.get("text") or "").strip()
         if text == "/quit":
             ui_say("Bye! 👋")
             break
-        ui_say("**" + text.upper() + "**")
-    return {"done": True}
+        history.append({"role": "user", "content": text})
+        reply = llm(history)
+        history.append({"role": "assistant", "content": reply["content"]})
+        ui_say(reply["content"])      # append the reply to the transcript
+        turns += 1
+    return {"turns": turns}
 `,
 	},
 	{
@@ -165,6 +175,73 @@ def main(input):
     ])
     ui_say("Thanks, " + (vals.get("name") or "stranger") + "! You picked " + str(vals.get("color")) + ".")
     return vals
+`,
+	},
+	{
+		ID:           "coding_agent",
+		Title:        "Coding assistant (self-hosted)",
+		Description:  "A chat agent that helps write/fix an agentle script. Backend (A) from PLAYTEST5: the harness is this script, the brain is llm(). The editor sends your message + current source each turn.",
+		Capabilities: []string{"llm"},
+		Source: "# A self-hosted coding assistant for agentle scripts. The editor sends your\n" +
+			"# message plus the current `main.star` source each turn (as data.source); the\n" +
+			"# harness asks the LLM and replies. Swap the mock for a real model to make it\n" +
+			"# genuinely useful. See PLAYTEST5.md for the full design + system prompt.\n" +
+			"SYSTEM = \"\"\"You are the coding assistant inside agentle, a platform for DURABLE AGENTS.\n" +
+			"You help the user write and debug ONE agentle script, main.star. This is NOT a normal\n" +
+			"Python project: scripts are Starlark (a deterministic Python dialect) run by a REPLAY\n" +
+			"engine — no imports, classes, while, recursion, try/except, open(), or network except\n" +
+			"through granted capabilities (llm, http_get, shell, mcp_call; always-on: log, now, rand,\n" +
+			"store, fetch, send, recv, deadline, parallel_map, ui_chat, ui_say, ui_form). The entry\n" +
+			"point is def main(input): and input is the event envelope {id,kind,workspace,data}.\n" +
+			"recv()/ui_form()/deadline() are durable suspend points; loop with bounded for-range, never\n" +
+			"while True. Propose minimal edits to main.star and explain briefly.\"\"\"\n" +
+			"\n" +
+			"def main(input):\n" +
+			"    ui_chat(title=\"Coding assistant\", intro=\"Ask me to write or fix this agentle script. /quit to end.\")\n" +
+			"    history = [{\"role\": \"system\", \"content\": SYSTEM}]\n" +
+			"    for _ in range(100):\n" +
+			"        msg = recv()\n" +
+			"        if msg == None:\n" +
+			"            break\n" +
+			"        text = (msg.get(\"text\") or \"\").strip()\n" +
+			"        if text == \"/quit\":\n" +
+			"            break\n" +
+			"        source = msg.get(\"source\") or \"\"\n" +
+			"        user = text\n" +
+			"        if source:\n" +
+			"            user += \"\\n\\nCurrent main.star:\\n```\\n\" + source + \"\\n```\"\n" +
+			"        history.append({\"role\": \"user\", \"content\": user})\n" +
+			"        reply = llm(history)\n" +
+			"        history.append({\"role\": \"assistant\", \"content\": reply[\"content\"]})\n" +
+			"        ui_say(reply[\"content\"])\n" +
+			"    return {\"turns\": (len(history) - 1) // 2}\n",
+	},
+	{
+		ID:           "stacked_ui",
+		Title:        "Chat + form stack",
+		Description:  "Shows the UI panel stack: a chat that opens a form modal over itself (/profile), which pops on submit.",
+		Capabilities: []string{},
+		Source: `# UI panels are a stack. ui_chat() pushes the base chat; ui_form() pushes a form
+# *over* it (rendered modal), and pops automatically once you submit. ui_pop()/
+# ui_clear() pop explicitly.
+def main(input):
+    ui_chat(title="Stacker", intro="Type /profile to open a form over this chat. /quit to end.")
+    for _ in range(50):
+        msg = recv()
+        if msg == None:
+            break
+        text = (msg.get("text") or "").strip()
+        if text == "/quit":
+            break
+        if text == "/profile":
+            vals = ui_form([
+                field("name", "Your name", required=True),
+                field("role", "Role", type="select", options=["dev", "ops", "pm"]),
+            ])
+            ui_say("Nice to meet you, " + (vals.get("name") or "?") + " (" + str(vals.get("role")) + ").")
+        else:
+            ui_say("You said: " + text)
+    return {"done": True}
 `,
 	},
 	{

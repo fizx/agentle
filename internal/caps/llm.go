@@ -14,8 +14,10 @@ import (
 	"github.com/kylemaxwell/agentle/internal/engine"
 )
 
-// LLMConfig is a bound llm tool instance. An empty BaseURL or APIKey selects the
-// offline mock provider so the platform is playable without credentials.
+// LLMConfig is a bound llm tool instance. An empty BaseURL selects the offline
+// mock provider so the platform is playable without credentials; once a BaseURL
+// is set the real OpenAI-compatible client is used. APIKey is optional — a local
+// OpenAI-compatible server (e.g. Ollama) needs no key, while hosted providers do.
 type LLMConfig struct {
 	BaseURL string // OpenAI-compatible base, e.g. https://api.openai.com/v1
 	APIKey  string // secret; injected as Bearer, never visible to the script
@@ -40,7 +42,7 @@ func LLM(cfg LLMConfig) engine.Executor {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: cfg.Timeout}
 	}
-	mock := cfg.BaseURL == "" || cfg.APIKey == ""
+	mock := cfg.BaseURL == ""
 	return engine.ExecutorFunc(func(ctx context.Context, inv engine.Invocation) (json.RawMessage, error) {
 		var a struct {
 			Messages    []map[string]any `json:"messages"`
@@ -74,7 +76,9 @@ func LLM(cfg LLMConfig) engine.Executor {
 			return nil, err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+		if cfg.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+		}
 
 		resp, err := cfg.Client.Do(req)
 		if err != nil {

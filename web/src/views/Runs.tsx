@@ -6,24 +6,27 @@ import { Json } from '../components/Json'
 import { TraceTimeline } from '../components/TraceTimeline'
 import { fmtUSD } from './Spend'
 
-export default function Runs({ focusExec, clearFocus }: { focusExec: string | null; clearFocus: () => void }) {
+export default function Runs({ focusExec, onSelect }: { focusExec: string | null; onSelect: (id: string) => void }) {
   const [execs, setExecs] = useState<Execution[]>([])
-  const [sel, setSel] = useState<string | null>(focusExec)
   const [detail, setDetail] = useState<Execution | null>(null)
   const [trace, setTrace] = useState<Trace | null>(null)
   const [view, setView] = useState<'timeline' | 'events'>('timeline')
   const [limit, setLimit] = useState(30)
+  const sel = focusExec // selection is the URL-driven focused execution
 
   const refresh = useCallback(async () => { setExecs((await api.listExecutions('', limit, 0)) || []) }, [limit])
   useEffect(() => { refresh() }, [refresh])
 
-  const select = useCallback(async (id: string) => {
-    setSel(id)
-    setDetail(await api.getExecution(id))
-    setTrace(await api.getTrace(id))
-  }, [])
-
-  useEffect(() => { if (focusExec) { select(focusExec); clearFocus() } }, [focusExec, select, clearFocus])
+  // Load the focused execution's detail + trace whenever the URL selection changes.
+  useEffect(() => {
+    if (!focusExec) { setDetail(null); setTrace(null); return }
+    let live = true
+    ;(async () => {
+      const d = await api.getExecution(focusExec); if (live) setDetail(d)
+      const tr = await api.getTrace(focusExec); if (live) setTrace(tr)
+    })()
+    return () => { live = false }
+  }, [focusExec])
 
   return (
     <div className="layout">
@@ -33,7 +36,7 @@ export default function Runs({ focusExec, clearFocus }: { focusExec: string | nu
           <button onClick={refresh}>↻</button>
         </div>
         {execs.map((e) => (
-          <div key={e.id} className={'list-item' + (e.id === sel ? ' active' : '')} onClick={() => select(e.id)}>
+          <div key={e.id} className={'list-item' + (e.id === sel ? ' active' : '')} onClick={() => onSelect(e.id)}>
             <div className="row spread">
               <span className="mono" style={{ fontSize: 12 }}>{e.id.slice(3, 11)}</span>
               <StatusBadge status={e.status} />

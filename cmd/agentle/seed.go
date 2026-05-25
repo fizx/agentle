@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 
@@ -67,12 +68,40 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 		log.Info("configured live llm from OPENAI_API_KEY", "model", model)
 	}
 
-	scripts, err := st.ListScripts(ctx, "", 1, 0)
-	if err != nil {
+	// A local Ollama llm config (OpenAI-compatible, needs no key) so the coding
+	// assistant is a real model fully offline. Idempotent; harmless if Ollama
+	// isn't running (calls just fail until it is).
+	ollamaCfg, _ := json.Marshal(map[string]any{"base_url": "http://localhost:11434/v1", "model": "qwen2.5-coder:32b"})
+	if err := st.PutToolConfig(ctx, store.ToolConfig{ID: "ollama", Capability: "llm", Config: ollamaCfg}); err != nil {
 		return err
 	}
-	if len(scripts) > 0 {
-		return nil // don't clobber an existing workspace
+
+	// The coding-assistant harness: a real agentle script that powers the in-editor
+	// agent panel (one execution per chat, bound to chat:{script}:{chat}). Prefer a
+	// configured OpenAI key, else local Ollama, so the assistant is a real model out
+	// of the box. Seeded once (independent of sample scripts) and left for the user.
+	harnessLLM := llmGrant
+	if harnessLLM == "llm-mock" {
+		harnessLLM = "ollama"
+	}
+	if _, err := st.GetScript(ctx, "sc_coding_assistant"); errors.Is(err, store.ErrNotFound) {
+		if _, err := st.CreateScript(ctx, "sc_coding_assistant", "coding-assistant", "u_admin"); err != nil {
+			return err
+		}
+		if _, err := st.SaveVersion(ctx, "sc_coding_assistant", examples.Find("coding_agent").Source, "",
+			[]store.GrantRef{{Capability: "llm", ConfigID: harnessLLM}}); err != nil {
+			return err
+		}
+		log.Info("seeded coding-assistant harness", "llm", harnessLLM)
+	}
+
+	// Seed the sample scripts only on a fresh database, detected by the absence of
+	// the canonical hello sample (a raw script count would now always be non-zero
+	// because the assistant harness above is itself a script).
+	if _, err := st.GetScript(ctx, "sc_hello"); err == nil {
+		return nil // samples already present; don't clobber the workspace
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return err
 	}
 
 	hello, err := st.CreateScript(ctx, "sc_hello", "hello-agent", "u_admin")

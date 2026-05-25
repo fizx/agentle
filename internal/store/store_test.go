@@ -302,3 +302,57 @@ func TestExecutionLifecycle(t *testing.T) {
 		t.Fatalf("actor_id not persisted: %q", list[0].ActorID)
 	}
 }
+
+func TestChatsCRUD(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	if cs, err := s.ListChats(ctx, "sc1"); err != nil || len(cs) != 0 {
+		t.Fatalf("empty list: %v %v", cs, err)
+	}
+	if err := s.PutChat(ctx, Chat{ID: "ch1", ScriptID: "sc1", ExecID: "ex1", Title: "New chat"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutChat(ctx, Chat{ID: "ch2", ScriptID: "sc1", ExecID: "ex2", Title: "Second"}); err != nil {
+		t.Fatal(err)
+	}
+	// A chat on a different script must not leak into sc1's list.
+	if err := s.PutChat(ctx, Chat{ID: "ch3", ScriptID: "sc2", ExecID: "ex3"}); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := s.ListChats(ctx, "sc1")
+	if err != nil || len(cs) != 2 {
+		t.Fatalf("sc1 chats = %d (%v)", len(cs), err)
+	}
+	if cs[0].ID != "ch1" || cs[1].ID != "ch2" { // ordered by created_at
+		t.Fatalf("order = %s,%s", cs[0].ID, cs[1].ID)
+	}
+
+	// Rename via upsert.
+	got, _ := s.GetChat(ctx, "ch1")
+	got.Title = "Renamed"
+	if err := s.PutChat(ctx, *got); err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := s.GetChat(ctx, "ch1"); g.Title != "Renamed" {
+		t.Fatalf("rename: %q", g.Title)
+	}
+
+	// Archived chats are excluded from the tab list.
+	got2, _ := s.GetChat(ctx, "ch2")
+	got2.Archived = true
+	if err := s.PutChat(ctx, *got2); err != nil {
+		t.Fatal(err)
+	}
+	if cs, _ := s.ListChats(ctx, "sc1"); len(cs) != 1 || cs[0].ID != "ch1" {
+		t.Fatalf("after archive: %v", cs)
+	}
+
+	// Delete removes the row.
+	if err := s.DeleteChat(ctx, "ch1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetChat(ctx, "ch1"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}

@@ -313,6 +313,16 @@ CREATE TABLE IF NOT EXISTS plugins (
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chats (
+  id TEXT PRIMARY KEY,
+  script_id TEXT NOT NULL,
+  exec_id TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chats_script ON chats(script_id, created_at);
 `
 
 func now() int64 { return time.Now().UnixNano() }

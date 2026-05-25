@@ -14,13 +14,27 @@ type UIMessage struct {
 	Blocks []any  `json:"blocks,omitempty"` // typed blocks (code/table/image)
 }
 
+// Panel is one entry in the UI panel stack (a chat or a form). Declares push a
+// panel; ui_pop()/ui_clear() and a submitted ui_form() pop. The dashboard renders
+// the stack as the base panel (usually a chat) with later panels (forms) modal
+// over it.
+type Panel struct {
+	Kind   string `json:"kind"`             // "chat" | "form"
+	Title  string `json:"title,omitempty"`  //
+	Intro  string `json:"intro,omitempty"`  //
+	Fields []any  `json:"fields,omitempty"` // form fields
+}
+
 // UI is the dashboard-facing projection of an interactive run, built from the
-// durable event log: a panel descriptor (chat or form) plus the transcript.
+// durable event log: a stack of panels (chat/form) plus the transcript. The
+// top-of-stack panel is also mirrored into Kind/Title/Intro/Fields for callers
+// that just need "is there a UI, and what's active".
 type UI struct {
-	Kind       string      `json:"kind"`             // "chat" | "form" | "" (no UI)
-	Title      string      `json:"title,omitempty"`  //
-	Intro      string      `json:"intro,omitempty"`  //
-	Fields     []any       `json:"fields,omitempty"` // form fields (latest form declare)
+	Kind       string      `json:"kind"`             // top panel kind: "chat" | "form" | "" (no UI)
+	Title      string      `json:"title,omitempty"`  // top panel
+	Intro      string      `json:"intro,omitempty"`  // top panel
+	Fields     []any       `json:"fields,omitempty"` // top panel form fields
+	Panels     []Panel     `json:"panels"`           // the full stack (bottom → top)
 	Transcript []UIMessage `json:"transcript"`       //
 	Status     int         `json:"status"`           //
 	Awaiting   bool        `json:"awaiting"`         // suspended waiting for the user
@@ -48,7 +62,7 @@ func (s *Service) GetUI(ctx context.Context, execID string) (*UI, error) {
 	if err != nil {
 		return nil, err
 	}
-	ui := &UI{Transcript: []UIMessage{}, Status: exe.Status, Awaiting: exe.Status == int(engine.StatusSuspended)}
+	ui := &UI{Panels: []Panel{}, Transcript: []UIMessage{}, Status: exe.Status, Awaiting: exe.Status == int(engine.StatusSuspended)}
 	for _, ev := range events {
 		if ev.Kind != engine.EventRPCResult || ev.RPC == nil || len(ev.RPC.Result) == 0 {
 			continue
@@ -61,8 +75,13 @@ func (s *Service) GetUI(ctx context.Context, execID string) (*UI, error) {
 			}
 			switch u.Kind {
 			case "chat", "form":
-				ui.Kind = u.Kind
-				ui.Title, ui.Intro, ui.Fields = u.Title, u.Intro, u.Fields
+				ui.Panels = append(ui.Panels, Panel{Kind: u.Kind, Title: u.Title, Intro: u.Intro, Fields: u.Fields})
+			case "pop":
+				if n := len(ui.Panels); n > 0 {
+					ui.Panels = ui.Panels[:n-1]
+				}
+			case "clear":
+				ui.Panels = ui.Panels[:0]
 			case "say":
 				ui.Transcript = append(ui.Transcript, UIMessage{Role: u.Role, Text: u.Text, Blocks: u.Blocks})
 			}
@@ -83,6 +102,11 @@ func (s *Service) GetUI(ctx context.Context, execID string) (*UI, error) {
 			}
 			ui.Transcript = append(ui.Transcript, UIMessage{Role: "user", Text: text})
 		}
+	}
+	// Mirror the active (top) panel into the flat fields for simple callers.
+	if n := len(ui.Panels); n > 0 {
+		top := ui.Panels[n-1]
+		ui.Kind, ui.Title, ui.Intro, ui.Fields = top.Kind, top.Title, top.Intro, top.Fields
 	}
 	return ui, nil
 }

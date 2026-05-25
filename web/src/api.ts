@@ -1,5 +1,5 @@
 import type {
-  ApiToken, Capability, Example, Execution, Plugin, RunUI, Script, ScriptDetail, Spend, ToolConfig, Trace, Trigger, User, Version,
+  ApiToken, AppInfo, Capability, Chat, Example, Execution, Plugin, RunUI, Script, ScriptDetail, Spend, ToolConfig, Trace, Trigger, User, Version,
 } from './types'
 
 const USER_KEY = 'agentle.user'
@@ -36,6 +36,7 @@ export const api = {
   me: () => req<User>('GET', '/me'),
   capabilities: () => req<Capability[]>('GET', '/capabilities'),
   examples: () => req<Example[]>('GET', '/examples'),
+  apps: () => req<AppInfo[]>('GET', '/apps'),
 
   listUsers: () => req<User[]>('GET', '/users'),
   putUser: (u: Partial<User>) => req<User>('PUT', '/users', u),
@@ -49,6 +50,11 @@ export const api = {
     req<Version>('POST', `/scripts/${id}/versions`, { source, grants, image }),
   restoreVersion: (id: string, v: number) => req<Version>('POST', `/scripts/${id}/versions/${v}/restore`),
   run: (id: string, input: unknown, version?: number) => req<Execution>('POST', `/scripts/${id}/run`, { input, version }),
+
+  listChats: (scriptId: string) => req<Chat[]>('GET', `/scripts/${scriptId}/chats`),
+  createChat: (scriptId: string, title?: string) => req<Chat>('POST', `/scripts/${scriptId}/chats`, { title: title || '' }),
+  renameChat: (chatId: string, title: string) => req<Chat>('PUT', `/chats/${chatId}`, { title }),
+  deleteChat: (chatId: string) => req<void>('DELETE', `/chats/${chatId}`),
 
   listExecutions: (script?: string, limit?: number, offset?: number) =>
     req<Execution[]>('GET', '/executions' + qs({ script, limit, offset })),

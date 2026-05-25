@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -56,6 +57,8 @@ func (s *Server) Handler() http.Handler {
 		r.Put("/users", s.putUser)
 		r.Delete("/users/{id}", s.deleteUser)
 
+		r.Get("/apps", s.listApps)
+
 		r.Get("/scripts", s.listScripts)
 		r.Post("/scripts", s.createScript)
 		r.Get("/scripts/{id}", s.getScript)
@@ -64,6 +67,11 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/scripts/{id}/versions", s.saveVersion)
 		r.Post("/scripts/{id}/versions/{v}/restore", s.restoreVersion)
 		r.Post("/scripts/{id}/run", s.runScript)
+
+		r.Get("/scripts/{id}/chats", s.listChats)
+		r.Post("/scripts/{id}/chats", s.createChat)
+		r.Put("/chats/{id}", s.updateChat)
+		r.Delete("/chats/{id}", s.deleteChat)
 
 		r.Get("/executions", s.listExecutions)
 		r.Get("/executions/{id}", s.getExecution)
@@ -176,6 +184,65 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- apps -------------------------------------------------------------------
+
+// appInfo describes a script that renders an interactive UI when run ("an app").
+// Apps are auto-detected — a script is an app when its latest version declares a
+// UI via ui_chat()/ui_form() — so launching one from the Apps tab pops its panel.
+type appInfo struct {
+	ScriptID string `json:"script_id"`
+	Name     string `json:"name"`
+	Owner    string `json:"owner"`
+	Version  uint64 `json:"version"`
+	Kind     string `json:"kind"`            // "chat" | "form"
+	Title    string `json:"title,omitempty"` // best-effort from source
+	Intro    string `json:"intro,omitempty"` // best-effort from source
+}
+
+var (
+	reUIChat  = regexp.MustCompile(`\bui_chat\s*\(`)
+	reUIForm  = regexp.MustCompile(`\bui_form\s*\(`)
+	reUITitle = regexp.MustCompile(`title\s*=\s*["']([^"']*)["']`)
+	reUIIntro = regexp.MustCompile(`intro\s*=\s*["']([^"']*)["']`)
+)
+
+// listApps returns launchable apps: scripts whose latest version declares an
+// interactive UI. Visibility follows the same owner rules as script listing.
+func (s *Server) listApps(w http.ResponseWriter, r *http.Request) {
+	scripts, err := s.svc.Store.ListScripts(r.Context(), visibilityOwner(r), 500, 0)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out := []appInfo{}
+	for _, sc := range scripts {
+		if sc.CurrentVersion == 0 {
+			continue
+		}
+		v, err := s.svc.Store.GetVersion(r.Context(), sc.ID, sc.CurrentVersion)
+		if err != nil {
+			continue
+		}
+		hasChat, hasForm := reUIChat.MatchString(v.Source), reUIForm.MatchString(v.Source)
+		if !hasChat && !hasForm {
+			continue
+		}
+		kind := "chat"
+		if hasForm && !hasChat {
+			kind = "form"
+		}
+		app := appInfo{ScriptID: sc.ID, Name: sc.Name, Owner: sc.Owner, Version: sc.CurrentVersion, Kind: kind}
+		if m := reUITitle.FindStringSubmatch(v.Source); m != nil {
+			app.Title = m[1]
+		}
+		if m := reUIIntro.FindStringSubmatch(v.Source); m != nil {
+			app.Intro = m[1]
+		}
+		out = append(out, app)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // --- scripts ---------------------------------------------------------------

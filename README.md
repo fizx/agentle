@@ -29,6 +29,9 @@ Flags: `--addr :8080`, `--data ./data`.
 
 ## What you can do in the dashboard
 
+- **Apps** — a one-click launcher for scripts that render a UI. Any script whose
+  latest version calls `ui_chat()`/`ui_form()` is auto-detected as an app; click
+  **Open** to run it and use its chat/form panel full-screen (no editor needed).
 - **Scripts** — edit Starlark in CodeMirror, grant capabilities (tool configs),
   save an immutable version, and run with a JSON input. Output + a link to the
   trace appear inline.
@@ -91,21 +94,46 @@ in-VM RPC, so it doesn't affect deterministic replay.
 
 ## Interactive UI (chat & forms)
 
-A script can declare a panel and drive it from the dashboard:
+`ui_chat()` is **not** magic — it only opens the panel. The *script* drives the
+conversation, so the behavior is whatever you write (here, an LLM each turn):
 
 ```python
 def main(input):
-    ui_chat(title="Echo bot")
+    ui_chat(title="Assistant", intro="Ask me anything.")
+    history = [{"role": "system", "content": "You are a concise assistant."}]
     for _ in range(100):
         msg = recv()            # durably suspend until the user sends
         if msg == None: break
-        ui_say("**" + msg["text"].upper() + "**")   # markdown + typed blocks
+        history.append({"role": "user", "content": msg["text"]})
+        reply = llm(history)
+        history.append({"role": "assistant", "content": reply["content"]})
+        ui_say(reply["content"])   # markdown + typed blocks
 ```
 
 `ui_form([field(...), ...])` shows a form and returns the submitted values. The
 panel exchanges messages with the run over the actor inbox (`POST
 /api/executions/{id}/messages`), and the run durably suspends between turns — so a
 chat can live indefinitely while idle. See the `chat_ui` and `form_ui` examples.
+Scripts that declare a panel show up in the **Apps** tab as one-click launchers.
+
+## Coding assistant in the editor
+
+The Scripts editor has a docked **✨ Assistant** panel (split beside CodeMirror):
+an autonomous coding agent that helps you write/debug the open script. It's
+**self-hosting** — the agent harness is itself an agentle script (the seeded
+`coding-assistant`, from the `coding_agent` example), so each chat is a durable,
+replayable, cost-tracked execution bound to `chat:{script}:{chat}`. Every turn
+carries the live editor buffer, so the agent reasons over your current code.
+There are **N chats per script** in a tab strip (create / switch / double-click
+rename / auto-title / close), plus a working indicator and Stop.
+
+The brain is the `llm` capability, which speaks the OpenAI chat-completions
+format — point it at **any OpenAI-compatible endpoint**. For a real agent fully
+offline, run a local **Ollama** server (`base_url: http://localhost:11434/v1`,
+e.g. `model: qwen2.5-coder:32b`, no API key needed); the seeded `ollama` config +
+harness grant make it work out of the box when Ollama is up. A hosted provider
+works the same way with a `base_url` + key. The offline mock only echoes (it
+can't author code), so it's selected only when no `base_url` is configured.
 
 ## Pluggable secrets
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import Apps from './views/Apps'
 import Scripts from './views/Scripts'
 import Runs from './views/Runs'
 import Settings from './views/Settings'
@@ -8,11 +9,20 @@ import Users from './views/Users'
 import { api, setUserId } from './api'
 import type { User } from './types'
 
-type Tab = 'scripts' | 'runs' | 'spend' | 'settings' | 'plugins' | 'users'
+type Tab = 'scripts' | 'apps' | 'runs' | 'spend' | 'settings' | 'plugins' | 'users'
+const ALL_TABS: Tab[] = ['scripts', 'apps', 'runs', 'spend', 'settings', 'plugins', 'users']
+
+// The active tab (and, for runs, the focused execution) lives in the URL hash so
+// the browser back/forward buttons navigate between views. e.g. "#runs/ex_123".
+function parseHash(): { tab: Tab; exec: string | null } {
+  const raw = location.hash.replace(/^#\/?/, '')
+  const [seg, sub] = raw.split('/')
+  const tab = (ALL_TABS as string[]).includes(seg) ? (seg as Tab) : 'scripts'
+  return { tab, exec: tab === 'runs' && sub ? sub : null }
+}
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>('scripts')
-  const [focusExec, setFocusExec] = useState<string | null>(null)
+  const [{ tab, exec }, setRoute] = useState(parseHash)
   const [me, setMe] = useState<User | null>(null)
   const [users, setUsers] = useState<User[]>([])
 
@@ -24,13 +34,21 @@ export default function App() {
   }, [])
   useEffect(() => { loadIdentity() }, [loadIdentity])
 
-  const openRun = (execId: string) => { setFocusExec(execId); setTab('runs') }
+  useEffect(() => {
+    if (!location.hash) history.replaceState(null, '', '#scripts') // default landing = scripts
+    const onHash = () => setRoute(parseHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // navigate pushes a history entry (setting location.hash fires hashchange).
+  const go = (t: Tab, e?: string) => { location.hash = e ? `${t}/${e}` : t }
   const switchUser = (id: string) => { setUserId(id); window.location.reload() }
 
   const isAdmin = me?.role === 'admin'
   const tabs: Tab[] = isAdmin
-    ? ['scripts', 'runs', 'spend', 'settings', 'plugins', 'users']
-    : ['scripts', 'runs', 'spend', 'settings']
+    ? ['scripts', 'apps', 'runs', 'spend', 'settings', 'plugins', 'users']
+    : ['scripts', 'apps', 'runs', 'spend', 'settings']
 
   return (
     <>
@@ -38,7 +56,7 @@ export default function App() {
         <span className="brand">agentle</span>
         <div className="tabs">
           {tabs.map((t) => (
-            <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>
+            <button key={t} className={tab === t ? 'active' : ''} onClick={() => go(t)}>
               {t[0].toUpperCase() + t.slice(1)}
             </button>
           ))}
@@ -51,8 +69,9 @@ export default function App() {
           </select>
         </div>
       </div>
-      {tab === 'scripts' && <Scripts onOpenRun={openRun} />}
-      {tab === 'runs' && <Runs focusExec={focusExec} clearFocus={() => setFocusExec(null)} />}
+      {tab === 'apps' && <Apps />}
+      {tab === 'scripts' && <Scripts onOpenRun={(id) => go('runs', id)} />}
+      {tab === 'runs' && <Runs focusExec={exec} onSelect={(id) => go('runs', id)} />}
       {tab === 'spend' && <Spend />}
       {tab === 'settings' && <Settings />}
       {tab === 'plugins' && <Plugins />}

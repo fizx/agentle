@@ -75,6 +75,42 @@ func TestLLMMock(t *testing.T) {
 	}
 }
 
+// TestLLMRealProviderNoKey: once a BaseURL is set the real OpenAI-compatible
+// client is used even without an API key (the local-Ollama case), and no
+// Authorization header is sent when the key is empty.
+func TestLLMRealProviderNoKey(t *testing.T) {
+	var gotAuth string
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"model":"local","choices":[{"message":{"role":"assistant","content":"real reply"}}]}`))
+	}))
+	defer srv.Close()
+
+	exec := LLM(LLMConfig{BaseURL: srv.URL}) // base_url set, no key => real client, no mock
+	args, _ := json.Marshal(map[string]any{
+		"messages": []map[string]any{{"role": "user", "content": "hi"}},
+	})
+	res, err := exec.Execute(context.Background(), engine.Invocation{Capability: "llm", Method: "chat", Args: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Content string `json:"content"`
+	}
+	_ = json.Unmarshal(res, &out)
+	if out.Content != "real reply" {
+		t.Fatalf("expected real provider reply, got %q (mock would echo)", out.Content)
+	}
+	if gotAuth != "" {
+		t.Fatalf("no Authorization header expected without a key, got %q", gotAuth)
+	}
+	if gotPath != "/chat/completions" {
+		t.Fatalf("expected /chat/completions, got %q", gotPath)
+	}
+}
+
 func TestKVRoundTrip(t *testing.T) {
 	store := NewMemKV()
 	exec := KV(store, "actor1")

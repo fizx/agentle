@@ -7,6 +7,11 @@ import { Json } from '../components/Json'
 import { CodeEditor } from '../components/CodeEditor'
 import { PromptModal } from '../components/Modal'
 import { UIPanel } from '../components/UIPanel'
+import { AgentPanel } from '../components/AgentPanel'
+
+// The seeded coding-assistant harness backs the in-editor agent panel; hide it
+// from the script list so it reads as a feature, not user content.
+const HARNESS_SCRIPT = 'sc_coding_assistant'
 
 type Sub = 'editor' | 'runs' | 'triggers' | 'secrets'
 
@@ -26,6 +31,7 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
   const [limit, setLimit] = useState(20)
   const [picking, setPicking] = useState(false)
   const [uiExec, setUiExec] = useState<string | null>(null)
+  const [assistant, setAssistant] = useState(false)
 
   const refresh = useCallback(async () => {
     setScripts((await api.listScripts(limit, 0)) || [])
@@ -33,6 +39,21 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
     setNames((await api.capabilities()).map((c) => c.name))
   }, [limit])
   useEffect(() => { refresh() }, [refresh])
+
+  // A UI run starts out suspended (parked on recv/form). Poll while it's
+  // non-terminal so the Result card reflects completion + output once the user
+  // finishes the chat/form, instead of being stuck showing "suspended".
+  useEffect(() => {
+    if (!result || (result.status !== 0 && result.status !== 3)) return
+    const id = result.id
+    const t = setInterval(async () => {
+      try {
+        const e = await api.getExecution(id)
+        setResult((cur) => (cur && cur.id === e.id ? e : cur))
+      } catch { /* transient */ }
+    }, 1000)
+    return () => clearInterval(t)
+  }, [result?.id, result?.status])
 
   const select = async (id: string) => {
     setSel(id); setResult(null); setErr(''); setSub('editor'); setPicking(false)
@@ -103,7 +124,7 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
           <strong>Scripts</strong>
           <button onClick={() => { setPicking(true); setSel(null); setDetail(null) }}>+ New</button>
         </div>
-        {scripts.map((s) => (
+        {scripts.filter((s) => s.id !== HARNESS_SCRIPT).map((s) => (
           <div key={s.id} className={'list-item' + (s.id === sel ? ' active' : '')} onClick={() => select(s.id)}>
             <div>{s.name}</div>
             <div className="muted mono" style={{ fontSize: 11 }}>v{s.current_version} · {s.owner || '—'}</div>
@@ -132,10 +153,14 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
             </div>
 
             {sub === 'editor' && (
-              <>
+              <div className={'editor-split' + (assistant ? ' with-agent' : '')}>
+                <div className="editor-main">
                 <div className="row spread" style={{ marginBottom: 8 }}>
                   <span className="muted">Ctrl-Space for capability autocomplete</span>
                   <div className="row">
+                    <button className={assistant ? 'active' : ''} onClick={() => setAssistant((a) => !a)}>
+                      {assistant ? 'Hide assistant' : '✨ Assistant'}
+                    </button>
                     <button onClick={save} disabled={busy}>Save version</button>
                     <button className="primary" onClick={run} disabled={busy}>Run</button>
                   </div>
@@ -202,7 +227,9 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
                     </tbody>
                   </table>
                 </div>
-              </>
+                </div>
+                {assistant && <AgentPanel scriptId={sel} getSource={() => source} onClose={() => setAssistant(false)} />}
+              </div>
             )}
 
             {sub === 'runs' && <ScriptRuns scriptId={sel} onOpenRun={onOpenRun} />}

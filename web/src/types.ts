@@ -135,14 +135,32 @@ export interface UIField {
   default?: unknown
 }
 
-export interface RunUI {
-  kind: string // chat | form | ''
+export interface UIPanelDesc {
+  kind: string // chat | form
   title?: string
   intro?: string
   fields?: UIField[]
+}
+
+export interface RunUI {
+  kind: string // top-of-stack panel kind: chat | form | ''
+  title?: string
+  intro?: string
+  fields?: UIField[]
+  panels: UIPanelDesc[] // the full panel stack (bottom → top)
   transcript: UIMessage[]
   status: number
   awaiting: boolean
+}
+
+export interface AppInfo {
+  script_id: string
+  name: string
+  owner: string
+  version: number
+  kind: string // chat | form
+  title?: string
+  intro?: string
 }
 
 export interface Plugin {
@@ -161,6 +179,16 @@ export interface ApiToken {
   created_at: number
   last_used_at: number
   token?: string // plaintext, returned only at creation
+}
+
+export interface Chat {
+  id: string
+  script_id: string
+  exec_id: string
+  title: string
+  archived: boolean
+  created_at: number
+  updated_at: number
 }
 
 export interface Example {
