@@ -31,7 +31,16 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
   const [limit, setLimit] = useState(20)
   const [picking, setPicking] = useState(false)
   const [uiExec, setUiExec] = useState<string | null>(null)
-  const [assistant, setAssistant] = useState(false)
+  const [assistant, setAssistant] = useState(true)
+  // Docked-assistant width, drag-resized (see startResize) and persisted.
+  const [agentWidth, setAgentWidth] = useState(() => {
+    const v = Number(localStorage.getItem('agentWidth'))
+    return v >= 300 && v <= 820 ? v : 420
+  })
+  const [resizing, setResizing] = useState(false)
+  // A prompt to hand the assistant as the first message of a freshly created
+  // script (set by "describe what to build" on the new-script screen).
+  const [seedPrompt, setSeedPrompt] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setScripts((await api.listScripts(limit, 0)) || [])
@@ -56,7 +65,7 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
   }, [result?.id, result?.status])
 
   const select = async (id: string) => {
-    setSel(id); setResult(null); setErr(''); setSub('editor'); setPicking(false)
+    setSel(id); setResult(null); setErr(''); setSub('editor'); setPicking(false); setSeedPrompt(null)
     const d = await api.getScript(id)
     setDetail(d)
     const latest = d.versions?.[0]
@@ -68,6 +77,18 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
     const sc = await api.createScript(name, src)
     setPicking(false)
     await refresh(); select(sc.id)
+  }
+
+  // Create a blank script from a free-text prompt, then open the assistant and
+  // hand it the prompt as the first message so it writes the script for you.
+  const createFromPrompt = async (prompt: string) => {
+    const name = prompt.replace(/\s+/g, ' ').trim().slice(0, 40) || 'New script'
+    const sc = await api.createScript(name, 'def main(input):\n    return {}\n')
+    setPicking(false)
+    await refresh()
+    await select(sc.id)
+    setAssistant(true)
+    setSeedPrompt(prompt.trim())
   }
 
   const grantRefs = (): GrantRefInput[] => grants
@@ -147,6 +168,27 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
   const toggleGrant = (cid: string) =>
     setGrants((g) => g.includes(cid) ? g.filter((x) => x !== cid) : [...g, cid])
 
+  // Drag the divider to resize the docked assistant. The panel hugs the right
+  // edge, so dragging left (smaller clientX) widens it.
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setResizing(true)
+    const startX = e.clientX, startW = agentWidth
+    let latest = startW
+    const onMove = (ev: MouseEvent) => {
+      latest = Math.min(Math.max(startW + (startX - ev.clientX), 300), 820)
+      setAgentWidth(latest)
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      setResizing(false)
+      localStorage.setItem('agentWidth', String(latest))
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   const subTabs: Sub[] = ['editor', 'runs', 'triggers', 'secrets']
 
   return (
@@ -166,9 +208,9 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
         {scripts.length === 0 && <div className="muted">No scripts yet.</div>}
       </div>
 
-      <div className="main">
+      <div className={'main' + (assistant && sub === 'editor' && sel && detail ? ' main-fixed' : '')}>
         {uiExec && <UIPanel execId={uiExec} onClose={() => setUiExec(null)} />}
-        {picking && <ExampleGallery onCreate={createFrom} onCancel={() => setPicking(false)} />}
+        {picking && <ExampleGallery onCreate={createFrom} onPrompt={createFromPrompt} onCancel={() => setPicking(false)} />}
         {!sel && !picking && <div className="muted">Select a script, or click + New to start from an example.</div>}
         {sel && detail && (
           <>
@@ -261,13 +303,20 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
                 </div>
                 </div>
                 {assistant && (
-                  <AgentPanel
-                    scriptId={sel}
-                    getSource={() => source}
-                    onApply={setSource}
-                    onRun={runForAgent}
-                    onClose={() => setAssistant(false)}
-                  />
+                  <>
+                    <div className={'agent-resizer' + (resizing ? ' dragging' : '')}
+                      onMouseDown={startResize} title="Drag to resize the assistant" />
+                    <AgentPanel
+                      width={agentWidth}
+                      scriptId={sel}
+                      getSource={() => source}
+                      onApply={setSource}
+                      onRun={runForAgent}
+                      onClose={() => setAssistant(false)}
+                      initialPrompt={seedPrompt}
+                      onSeeded={() => setSeedPrompt(null)}
+                    />
+                  </>
                 )}
               </div>
             )}
@@ -282,11 +331,13 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
   )
 }
 
-function ExampleGallery({ onCreate, onCancel }: { onCreate: (name: string, src: string) => void; onCancel: () => void }) {
+function ExampleGallery({ onCreate, onPrompt, onCancel }: { onCreate: (name: string, src: string) => void; onPrompt: (prompt: string) => void; onCancel: () => void }) {
   const [examples, setExamples] = useState<Example[]>([])
   const [naming, setNaming] = useState<{ title: string; source: string } | null>(null)
+  const [prompt, setPrompt] = useState('')
   useEffect(() => { api.examples().then(setExamples) }, [])
   const pick = (title: string, source: string) => setNaming({ title, source })
+  const submitPrompt = () => { if (prompt.trim()) onPrompt(prompt.trim()) }
   return (
     <div className="card">
       {naming && (
@@ -296,8 +347,20 @@ function ExampleGallery({ onCreate, onCancel }: { onCreate: (name: string, src: 
           onCancel={() => setNaming(null)}
         />
       )}
-      <div className="row spread"><h2>Start from an example</h2><button onClick={onCancel}>cancel</button></div>
-      <div className="muted" style={{ marginBottom: 10 }}>Pick a template, or start blank. Capabilities listed need a matching grant under Settings.</div>
+      <div className="row spread"><h2>New script</h2><button onClick={onCancel}>cancel</button></div>
+      <div className="prompt-create">
+        <h3>✨ Describe what you want to build</h3>
+        <div className="muted" style={{ marginBottom: 8, fontSize: 12 }}>The assistant will scaffold it for you — you can refine it in the editor.</div>
+        <div className="row" style={{ alignItems: 'flex-start' }}>
+          <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={2}
+            placeholder="e.g. Every morning, fetch open PRs from GitHub and post a summary to Slack"
+            style={{ flex: 1 }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitPrompt() }} />
+          <button className="primary" disabled={!prompt.trim()} onClick={submitPrompt}>Create with assistant</button>
+        </div>
+      </div>
+      <h3 style={{ marginTop: 18 }}>or start from a template</h3>
+      <div className="muted" style={{ marginBottom: 10, fontSize: 12 }}>Pick a template, or start blank. Capabilities listed need a matching grant under Settings.</div>
       <div className="example-grid">
         <div className="example" onClick={() => pick('blank', 'def main(input):\n    return {}\n')}>
           <strong>Blank</strong>

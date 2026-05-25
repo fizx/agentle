@@ -11,12 +11,15 @@ import { ChatBubble, Thinking } from './UIPanel'
 // a tool batch (ui.pending_tools), this panel executes it client-side — reading
 // the buffer, applying edits via onApply, running via onRun — and posts the
 // results back, so the round-trip is durable + replay-safe. See PLAYTEST5.md.
-export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose }: {
+export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose, width, initialPrompt, onSeeded }: {
   scriptId: string
   getSource: () => string
   onApply: (source: string) => void
   onRun: (input: unknown) => Promise<string>
   onClose: () => void
+  width?: number
+  initialPrompt?: string | null
+  onSeeded?: () => void
 }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [activeId, setActiveId] = useState<string>('')
@@ -105,9 +108,11 @@ export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose }: {
   const runningTool = !!ui?.pending_tools
   const thinking = busy || runningTool || (!!ui && !done && !ui.awaiting)
 
-  const send = async () => {
-    if (!text.trim() || busy || !active || done) return
-    const t = text; setText(''); setBusy(true)
+  const send = async (override?: string) => {
+    const t = (override ?? text).trim()
+    if (!t || busy || !active || done) return
+    if (override === undefined) setText('')
+    setBusy(true)
     const firstTurn = (ui?.transcript.length ?? 0) === 0
     try {
       await api.postMessage(active.exec_id, { text: t, source: getSource() })
@@ -119,6 +124,18 @@ export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose }: {
       await poll()
     } finally { setBusy(false) }
   }
+
+  // Seed: when a script is created from a "describe what to build" prompt, send
+  // it as the first message once the fresh chat is parked on recv (awaiting).
+  const seeded = useRef(false)
+  useEffect(() => { seeded.current = false }, [initialPrompt])
+  useEffect(() => {
+    if (!initialPrompt || seeded.current || busy || !active || done) return
+    if (!ui?.awaiting || (ui?.transcript.length ?? 0) !== 0) return
+    seeded.current = true
+    onSeeded?.()
+    send(initialPrompt)
+  }, [initialPrompt, active?.exec_id, ui?.awaiting, ui?.transcript.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Stop ends the chat's harness loop (it breaks on /quit once the current turn
   // returns to recv). The durable run stays in history.
@@ -139,7 +156,7 @@ export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose }: {
   }
 
   return (
-    <div className="agent-panel">
+    <div className="agent-panel" style={width ? { width } : undefined}>
       <div className="agent-tabs">
         {chats.map((c) => (
           <div key={c.id} className={'agent-tab' + (c.id === activeId ? ' active' : '')} onClick={() => setActiveId(c.id)}>
@@ -181,13 +198,13 @@ export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose }: {
 
       <div className="agent-composer">
         <input
-          placeholder={done ? 'Chat ended — open a new one (+)' : ui?.awaiting ? 'Message the assistant…' : 'Assistant is working…'}
+          placeholder={done ? 'Chat ended — open a new one (+)' : thinking ? 'Assistant is working…' : 'Message the assistant…'}
           value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') send() }}
-          disabled={done || (!ui?.awaiting && !text)} />
+          disabled={done || thinking} />
         {thinking
           ? <button onClick={stop} title="End this chat">Stop</button>
-          : <button className="primary" onClick={send} disabled={busy || done || !ui?.awaiting}>Send</button>}
+          : <button className="primary" onClick={() => send()} disabled={busy || done || !text.trim()}>Send</button>}
       </div>
     </div>
   )

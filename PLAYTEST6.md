@@ -1,0 +1,5 @@
+- please leave the assistant visible by default.
+- needs a dragger to resize the assistant width.
+- we're now double scrollbar with the assistant and the main/parent.  also the editor has a scrollbar.  can we do sensible things with nested scrolling (like perhaps never root/parent scrolls)
+- when there's no chats, the input says "assistant is working"
+- Above the templates on the new script screen, give an option for the user to prompt what they want to be created.
