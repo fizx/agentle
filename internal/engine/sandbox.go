@@ -74,6 +74,12 @@ func (f ExecutorFunc) Execute(ctx context.Context, inv Invocation) (json.RawMess
 // the principal's grants. Secret-refs are already resolved into these executors.
 type Environment map[string]Executor // capability name -> bound executor
 
+// ShellExecutor adapts a Sandbox to the "shell" capability Executor. The durable
+// engine wires shell internally from its per-execution sandbox; this exported
+// constructor lets out-of-engine drivers (e.g. the eval runner, which runs shell
+// live in a throwaway sandbox) inject the same behavior into an Environment.
+func ShellExecutor(sb Sandbox) Executor { return shellExecutor{sb} }
+
 // shellExecutor adapts a Sandbox to the "shell" capability. It is supplied by the
 // Mediator (which holds the per-execution Sandbox) rather than the Environment,
 // since the sandbox is provisioned after grants are resolved.

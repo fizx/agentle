@@ -282,3 +282,48 @@ func mustJSON(t *testing.T, data []byte, v any) {
 		t.Fatalf("unmarshal %s: %v", data, err)
 	}
 }
+
+func TestAPIRunFeedback(t *testing.T) {
+	ts := newTestServer(t)
+	// A run to label.
+	_, data := do(t, ts, "POST", "/api/scripts", map[string]any{"name": "fb", "source": "def main(i): return 1\n"})
+	var sc store.Script
+	mustJSON(t, data, &sc)
+	_, data = do(t, ts, "POST", "/api/scripts/"+sc.ID+"/run", map[string]any{"input": map[string]any{}})
+	var exe store.Execution
+	mustJSON(t, data, &exe)
+
+	// Vote up.
+	resp, _ := do(t, ts, "PUT", "/api/executions/"+exe.ID+"/feedback", map[string]any{"label": "up", "note": "looks right"})
+	if resp.StatusCode != 204 {
+		t.Fatalf("put feedback: %d", resp.StatusCode)
+	}
+	_, data = do(t, ts, "GET", "/api/executions/"+exe.ID, nil)
+	var got store.Execution
+	mustJSON(t, data, &got)
+	if got.Feedback != "up" || got.FeedbackNote != "looks right" {
+		t.Fatalf("feedback not persisted: %q / %q", got.Feedback, got.FeedbackNote)
+	}
+
+	// Invalid label rejected.
+	resp, _ = do(t, ts, "PUT", "/api/executions/"+exe.ID+"/feedback", map[string]any{"label": "maybe"})
+	if resp.StatusCode != 400 {
+		t.Fatalf("bad label should 400, got %d", resp.StatusCode)
+	}
+
+	// Clear. (Fresh struct: the cleared response omits "feedback", so reusing the
+	// prior value would mask a regression.)
+	do(t, ts, "PUT", "/api/executions/"+exe.ID+"/feedback", map[string]any{"label": ""})
+	_, data = do(t, ts, "GET", "/api/executions/"+exe.ID, nil)
+	var cleared store.Execution
+	mustJSON(t, data, &cleared)
+	if cleared.Feedback != "" {
+		t.Fatalf("feedback not cleared: %q", cleared.Feedback)
+	}
+
+	// Unknown execution => 404 (not silently created).
+	resp, _ = do(t, ts, "PUT", "/api/executions/ex_nope/feedback", map[string]any{"label": "up"})
+	if resp.StatusCode != 404 {
+		t.Fatalf("unknown exec should 404, got %d", resp.StatusCode)
+	}
+}

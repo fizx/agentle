@@ -65,6 +65,8 @@ export interface Execution {
   trigger: string
   created_at: number
   updated_at: number
+  feedback?: string // pointwise human label: "up" | "down" | ""
+  feedback_note?: string // reviewer note (detail view only)
 }
 
 export interface Span {
@@ -165,6 +167,95 @@ export interface RunUI {
   status: number
   awaiting: boolean
   pending_tools?: ToolBatch // editor tool calls awaiting client execution
+}
+
+export interface Golden {
+  id: string
+  script_id: string
+  origin_exec: string
+  origin_version: number
+  label: string // success | failure
+  persona?: string
+  criteria?: string
+  note?: string
+  created_at: number
+}
+
+export interface CriterionResult {
+  criterion: string
+  pass: boolean
+  evidence?: string
+}
+
+export interface Verdict {
+  pass: boolean
+  mode: string // prefix | full
+  criteria?: CriterionResult[]
+  reasoning?: string
+  raw?: string
+}
+
+export interface EvalResult {
+  golden_id: string
+  script_id: string
+  version: number
+  label: string
+  executed: number
+  golden_len: number
+  coverage: number
+  completed: boolean
+  stop_kind?: string // '' if completed; else write_miss | recv_exhausted | budget
+  stop_msg?: string
+  output?: unknown
+  error?: string
+  verdict?: Verdict
+  judge_error?: string
+}
+
+export interface EvalOpts {
+  version?: number
+  allowReads?: boolean
+  miss?: string // fail | go_live | flag
+  maxSteps?: number
+  judge?: boolean
+  judgeModel?: string
+  mode?: string // prefix | full
+}
+
+export interface EvalSuite {
+  golden_id: string
+  version: number
+  k: number
+  passes: number
+  pass_rate: number
+  flaky: boolean
+  mean_coverage: number
+  samples: EvalResult[]
+}
+
+export interface ToolPolicy {
+  server: string
+  tool: string
+  is_write: boolean
+  source: string // operator | annotation
+  created_at?: number
+}
+
+export interface ConsistencyResult {
+  consistent: boolean
+  detail: string
+  result?: EvalResult
+}
+
+export interface CalibrationStats {
+  n: number
+  agreements: number
+  accuracy: number
+  kappa: number
+  tp: number
+  tn: number
+  fp: number
+  fn: number
 }
 
 export interface AppInfo {

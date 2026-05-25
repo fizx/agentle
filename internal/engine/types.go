@@ -61,10 +61,11 @@ type Event struct {
 
 // RPCRecord captures a single capability invocation and (on Result) its outcome.
 type RPCRecord struct {
-	CallKey    string          `json:"call_key"`   // deterministic position in the call tree
-	Capability string          `json:"capability"` // e.g. "http", "llm", "kv", "shell"
-	Method     string          `json:"method"`     // operation on the capability
-	ArgsHash   string          `json:"args_hash"`  // hash of args; replay mismatch => nondeterminism
+	CallKey    string          `json:"call_key"`       // deterministic position in the call tree
+	Capability string          `json:"capability"`     // e.g. "http", "llm", "kv", "shell"
+	Method     string          `json:"method"`         // operation on the capability
+	ArgsHash   string          `json:"args_hash"`      // hash of args; replay mismatch => nondeterminism
+	Args       json.RawMessage `json:"args,omitempty"` // raw call args; powers the trace view + cassette extraction for evals (secrets are injected in-Go and never appear here)
 	IdemKey    string          `json:"idem_key,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"` // memoized payload (Result events)
 	Err        string          `json:"err,omitempty"`    // memoized typed error string (Result events)

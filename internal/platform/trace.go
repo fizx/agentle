@@ -53,6 +53,9 @@ func (s *Service) GetTrace(ctx context.Context, exec string) (*Trace, error) {
 			sp.Method = ev.RPC.Method
 			sp.CallKey = ev.RPC.CallKey
 			sp.Error = ev.RPC.Err
+			if len(ev.RPC.Args) > 0 {
+				sp.Args = preview(ev.RPC.Args)
+			}
 			if len(ev.RPC.Result) > 0 {
 				sp.Result = preview(ev.RPC.Result)
 				if ev.RPC.Capability == "llm" {

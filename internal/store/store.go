@@ -85,6 +85,13 @@ type Execution struct {
 	Trigger   string          `json:"trigger,omitempty"`
 	CreatedAt int64           `json:"created_at"`
 	UpdatedAt int64           `json:"updated_at"`
+
+	// Feedback is the pointwise human label on this run ("up" | "down" | ""),
+	// joined from run_feedback. Not a column on executions; populated by reads.
+	Feedback string `json:"feedback,omitempty"`
+	// FeedbackNote is the optional reviewer note; populated only by GetExecution
+	// (single-row reads), left empty in list views.
+	FeedbackNote string `json:"feedback_note,omitempty"`
 }
 
 // Trigger fires executions: cron (spec = cron expression) or webhook (spec =
@@ -323,6 +330,34 @@ CREATE TABLE IF NOT EXISTS chats (
   updated_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chats_script ON chats(script_id, created_at);
+CREATE TABLE IF NOT EXISTS run_feedback (
+  exec TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  user_id TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS goldens (
+  id TEXT PRIMARY KEY,
+  script_id TEXT NOT NULL,
+  origin_exec TEXT NOT NULL,
+  origin_version INTEGER NOT NULL,
+  label TEXT NOT NULL DEFAULT 'success',
+  persona TEXT NOT NULL DEFAULT '',
+  criteria TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_goldens_script ON goldens(script_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS tool_policy (
+  server TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  is_write INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT 'operator',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (server, tool)
+);
 `
 
 func now() int64 { return time.Now().UnixNano() }
@@ -630,10 +665,11 @@ func (s *Store) SetExecutionStatus(ctx context.Context, id string, status int, o
 
 func (s *Store) GetExecution(ctx context.Context, id string) (*Execution, error) {
 	var e Execution
-	var input, output sql.NullString
+	var input, output, label, note sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,script_id,version,actor_id,status,input,output,error,trigger,created_at,updated_at FROM executions WHERE id=?`, id).
-		Scan(&e.ID, &e.ScriptID, &e.Version, &e.ActorID, &e.Status, &input, &output, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt)
+		`SELECT e.id,e.script_id,e.version,e.actor_id,e.status,e.input,e.output,e.error,e.trigger,e.created_at,e.updated_at,f.label,f.note
+         FROM executions e LEFT JOIN run_feedback f ON f.exec=e.id WHERE e.id=?`, id).
+		Scan(&e.ID, &e.ScriptID, &e.Version, &e.ActorID, &e.Status, &input, &output, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt, &label, &note)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -646,6 +682,8 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*Execution, error)
 	if output.Valid {
 		e.Output = json.RawMessage(output.String)
 	}
+	e.Feedback = label.String
+	e.FeedbackNote = note.String
 	return &e, nil
 }
 
@@ -653,21 +691,22 @@ func (s *Store) GetExecution(ctx context.Context, id string) (*Execution, error)
 // owner (non-empty) restricts to executions of that owner's scripts (RBAC).
 func (s *Store) ListExecutions(ctx context.Context, scriptID, owner string, limit, offset int) ([]Execution, error) {
 	limit, offset = page(limit, offset)
-	q := `SELECT id,script_id,version,actor_id,status,error,trigger,created_at,updated_at FROM executions`
+	q := `SELECT e.id,e.script_id,e.version,e.actor_id,e.status,e.error,e.trigger,e.created_at,e.updated_at,f.label
+	      FROM executions e LEFT JOIN run_feedback f ON f.exec=e.id`
 	args := []any{}
 	where := []string{}
 	if scriptID != "" {
-		where = append(where, "script_id=?")
+		where = append(where, "e.script_id=?")
 		args = append(args, scriptID)
 	}
 	if owner != "" {
-		where = append(where, "script_id IN (SELECT id FROM scripts WHERE owner=?)")
+		where = append(where, "e.script_id IN (SELECT id FROM scripts WHERE owner=?)")
 		args = append(args, owner)
 	}
 	if len(where) > 0 {
 		q += ` WHERE ` + strings.Join(where, " AND ")
 	}
-	q += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	q += ` ORDER BY e.created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, limit, offset)
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -677,9 +716,11 @@ func (s *Store) ListExecutions(ctx context.Context, scriptID, owner string, limi
 	out := []Execution{}
 	for rows.Next() {
 		var e Execution
-		if err := rows.Scan(&e.ID, &e.ScriptID, &e.Version, &e.ActorID, &e.Status, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt); err != nil {
+		var label sql.NullString
+		if err := rows.Scan(&e.ID, &e.ScriptID, &e.Version, &e.ActorID, &e.Status, &e.Error, &e.Trigger, &e.CreatedAt, &e.UpdatedAt, &label); err != nil {
 			return nil, err
 		}
+		e.Feedback = label.String
 		out = append(out, e)
 	}
 	return out, rows.Err()

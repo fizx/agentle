@@ -68,6 +68,9 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/scripts/{id}/versions/{v}/restore", s.restoreVersion)
 		r.Post("/scripts/{id}/run", s.runScript)
 
+		r.Get("/scripts/{id}/goldens", s.listGoldens)
+		r.Get("/scripts/{id}/calibration", s.calibrate)
+
 		r.Get("/scripts/{id}/chats", s.listChats)
 		r.Post("/scripts/{id}/chats", s.createChat)
 		r.Put("/chats/{id}", s.updateChat)
@@ -78,6 +81,18 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/executions/{id}/trace", s.getTrace)
 		r.Get("/executions/{id}/ui", s.getUI)
 		r.Post("/executions/{id}/messages", s.postMessage)
+		r.Put("/executions/{id}/feedback", s.putFeedback)
+		r.Post("/executions/{id}/promote", s.promoteGolden)
+
+		r.Delete("/goldens/{id}", s.deleteGolden)
+		r.Put("/goldens/{id}/artifacts", s.updateGoldenArtifacts)
+		r.Post("/goldens/{id}/eval", s.runEval)
+		r.Get("/goldens/{id}/consistency", s.checkConsistency)
+		r.Post("/goldens/{id}/draft-persona", s.draftPersona)
+
+		r.Get("/tool-policy", s.listToolPolicies)
+		r.Put("/tool-policy", s.putToolPolicy)
+		r.Delete("/tool-policy", s.deleteToolPolicy)
 
 		r.Get("/spend", s.spend)
 
@@ -454,6 +469,31 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.svc.PostMessage(r.Context(), chi.URLParam(r, "id"), data); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// putFeedback records (or clears) the pointwise human label on a run — the
+// ground truth a golden's success/failure tag and the judge's calibration corpus
+// are built from. An empty label un-votes.
+func (s *Server) putFeedback(w http.ResponseWriter, r *http.Request) {
+	if s.execIfVisible(w, r, chi.URLParam(r, "id")) == nil {
+		return
+	}
+	var body struct {
+		Label string `json:"label"`
+		Note  string `json:"note"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Label != "" && !store.ValidFeedback(body.Label) {
+		httpError(w, http.StatusBadRequest, "label must be \"up\", \"down\", or empty")
+		return
+	}
+	if err := s.svc.Store.SetFeedback(r.Context(), chi.URLParam(r, "id"), body.Label, body.Note, currentUser(r.Context()).ID); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -1,5 +1,5 @@
 import type {
-  ApiToken, AppInfo, Capability, Chat, Example, Execution, Plugin, RunUI, Script, ScriptDetail, Spend, ToolConfig, Trace, Trigger, User, Version,
+  ApiToken, AppInfo, CalibrationStats, Capability, Chat, ConsistencyResult, Example, Execution, EvalOpts, EvalResult, EvalSuite, Golden, Plugin, RunUI, Script, ScriptDetail, Spend, ToolConfig, ToolPolicy, Trace, Trigger, User, Version,
 } from './types'
 
 const USER_KEY = 'agentle.user'
@@ -62,6 +62,36 @@ export const api = {
   getTrace: (id: string) => req<Trace>('GET', `/executions/${id}/trace`),
   getUI: (id: string) => req<RunUI>('GET', `/executions/${id}/ui`),
   postMessage: (id: string, data: unknown) => req<void>('POST', `/executions/${id}/messages`, data),
+  setFeedback: (id: string, label: string, note?: string) =>
+    req<void>('PUT', `/executions/${id}/feedback`, { label, note: note || '' }),
+  promoteGolden: (execId: string, label?: string, note?: string) =>
+    req<Golden>('POST', `/executions/${execId}/promote`, { label: label || '', note: note || '' }),
+
+  listGoldens: (scriptId: string) => req<Golden[]>('GET', `/scripts/${scriptId}/goldens`),
+  deleteGolden: (id: string) => req<void>('DELETE', `/goldens/${id}`),
+  updateGoldenArtifacts: (id: string, persona: string, criteria: string) =>
+    req<void>('PUT', `/goldens/${id}/artifacts`, { persona, criteria }),
+  runEval: (goldenId: string, o: EvalOpts = {}) =>
+    req<EvalResult>('POST', `/goldens/${goldenId}/eval` + qs({
+      version: o.version, allow_reads: o.allowReads ? 1 : undefined, miss: o.miss, max_steps: o.maxSteps,
+      judge: o.judge ? 1 : undefined, judge_model: o.judgeModel, mode: o.mode,
+    })),
+  calibrate: (scriptId: string, model?: string) =>
+    req<CalibrationStats>('GET', `/scripts/${scriptId}/calibration` + qs({ model })),
+  checkConsistency: (goldenId: string, model?: string) =>
+    req<ConsistencyResult>('GET', `/goldens/${goldenId}/consistency` + qs({ model })),
+  draftPersona: (goldenId: string, model?: string) =>
+    req<{ persona: string }>('POST', `/goldens/${goldenId}/draft-persona` + qs({ model })),
+  runEvalSuite: (goldenId: string, samples: number, o: EvalOpts = {}) =>
+    req<EvalSuite>('POST', `/goldens/${goldenId}/eval` + qs({
+      version: o.version, allow_reads: o.allowReads ? 1 : undefined, miss: o.miss,
+      judge: o.judge ? 1 : undefined, samples,
+    })),
+
+  listToolPolicies: () => req<ToolPolicy[]>('GET', '/tool-policy'),
+  putToolPolicy: (tp: ToolPolicy) => req<ToolPolicy>('PUT', '/tool-policy', tp),
+  deleteToolPolicy: (server: string, tool: string) =>
+    req<void>('DELETE', '/tool-policy' + qs({ server, tool })),
   spend: (by: string, since?: number) => req<Spend>('GET', '/spend' + qs({ by, since })),
 
   listConfigs: () => req<ToolConfig[]>('GET', '/configs'),

@@ -17,6 +17,24 @@ export default function Runs({ focusExec, onSelect }: { focusExec: string | null
   const refresh = useCallback(async () => { setExecs((await api.listExecutions('', limit, 0)) || []) }, [limit])
   useEffect(() => { refresh() }, [refresh])
 
+  // Pointwise label: clicking the active vote clears it (toggle). Optimistically
+  // update the open detail + list so the indicator reflects the new label.
+  const vote = useCallback(async (label: 'up' | 'down') => {
+    if (!detail) return
+    const next = detail.feedback === label ? '' : label
+    await api.setFeedback(detail.id, next)
+    setDetail({ ...detail, feedback: next })
+    setExecs((xs) => xs.map((x) => (x.id === detail.id ? { ...x, feedback: next } : x)))
+  }, [detail])
+
+  const [promoted, setPromoted] = useState<string | null>(null)
+  const promote = useCallback(async () => {
+    if (!detail) return
+    setPromoted(null)
+    const g = await api.promoteGolden(detail.id)
+    setPromoted(`Promoted to golden (${g.label}). Find it under the Evals tab.`)
+  }, [detail])
+
   // Load the focused execution's detail + trace whenever the URL selection changes.
   useEffect(() => {
     if (!focusExec) { setDetail(null); setTrace(null); return }
@@ -39,7 +57,11 @@ export default function Runs({ focusExec, onSelect }: { focusExec: string | null
           <div key={e.id} className={'list-item' + (e.id === sel ? ' active' : '')} onClick={() => onSelect(e.id)}>
             <div className="row spread">
               <span className="mono" style={{ fontSize: 12 }}>{e.id.slice(3, 11)}</span>
-              <StatusBadge status={e.status} />
+              <span className="row" style={{ gap: 4 }}>
+                {e.feedback === 'up' && <span title="marked success">👍</span>}
+                {e.feedback === 'down' && <span title="marked failure">👎</span>}
+                <StatusBadge status={e.status} />
+              </span>
             </div>
             <div className="muted" style={{ fontSize: 11 }}>{e.trigger} · {new Date(e.created_at / 1e6).toLocaleTimeString()}</div>
           </div>
@@ -54,8 +76,16 @@ export default function Runs({ focusExec, onSelect }: { focusExec: string | null
           <>
             <div className="row spread">
               <h2 className="mono">{detail.id}</h2>
-              <StatusBadge status={detail.status} />
+              <span className="row" style={{ gap: 8 }}>
+                <span className="row" style={{ gap: 4 }} title="Label this run — feeds golden datasets and judge calibration">
+                  <button className={detail.feedback === 'up' ? 'active' : ''} onClick={() => vote('up')}>👍 Success</button>
+                  <button className={detail.feedback === 'down' ? 'active' : ''} onClick={() => vote('down')}>👎 Fail</button>
+                </span>
+                <button onClick={promote} title="Add this run to the script's golden dataset">⭐ Promote</button>
+                <StatusBadge status={detail.status} />
+              </span>
             </div>
+            {promoted && <div className="card" style={{ marginBottom: 12 }}><span className="muted">{promoted}</span></div>}
             <div className="muted" style={{ marginBottom: 12 }}>
               script {detail.script_id} · v{detail.version} · {detail.trigger} · workspace <span className="mono">{detail.workspace}</span>
             </div>

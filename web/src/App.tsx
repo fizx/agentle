@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Apps from './views/Apps'
 import Scripts from './views/Scripts'
 import Runs from './views/Runs'
+import Evals from './views/Evals'
 import Settings from './views/Settings'
 import Spend from './views/Spend'
 import Plugins from './views/Plugins'
@@ -9,8 +10,8 @@ import Users from './views/Users'
 import { api, setUserId } from './api'
 import type { User } from './types'
 
-type Tab = 'scripts' | 'apps' | 'runs' | 'spend' | 'settings' | 'plugins' | 'users'
-const ALL_TABS: Tab[] = ['scripts', 'apps', 'runs', 'spend', 'settings', 'plugins', 'users']
+type Tab = 'scripts' | 'apps' | 'runs' | 'evals' | 'spend' | 'settings' | 'plugins' | 'users'
+const ALL_TABS: Tab[] = ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'plugins', 'users']
 
 // The active tab (and, for runs, the focused execution) lives in the URL hash so
 // the browser back/forward buttons navigate between views. e.g. "#runs/ex_123".
@@ -47,8 +48,8 @@ export default function App() {
 
   const isAdmin = me?.role === 'admin'
   const tabs: Tab[] = isAdmin
-    ? ['scripts', 'apps', 'runs', 'spend', 'settings', 'plugins', 'users']
-    : ['scripts', 'apps', 'runs', 'spend', 'settings']
+    ? ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'plugins', 'users']
+    : ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings']
 
   return (
     <>
@@ -72,6 +73,7 @@ export default function App() {
       {tab === 'apps' && <Apps />}
       {tab === 'scripts' && <Scripts onOpenRun={(id) => go('runs', id)} />}
       {tab === 'runs' && <Runs focusExec={exec} onSelect={(id) => go('runs', id)} />}
+      {tab === 'evals' && <Evals onOpenRun={(id) => go('runs', id)} />}
       {tab === 'spend' && <Spend />}
       {tab === 'settings' && <Settings />}
       {tab === 'plugins' && <Plugins />}

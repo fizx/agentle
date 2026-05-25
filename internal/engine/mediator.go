@@ -174,7 +174,7 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 	// can dedupe external side effects across replay/retry.
 	if !inv.Idempotent {
 		intent := Event{Kind: EventRPCIntent, WallTime: time.Now().UnixNano(), RPC: &RPCRecord{
-			CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, IdemKey: inv.IdemKey,
+			CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, Args: inv.Args, IdemKey: inv.IdemKey,
 		}}
 		if err := m.append(ctx, intent, true); err != nil {
 			return nil, err
@@ -192,7 +192,7 @@ func (m *mediator) Call(ctx context.Context, inv Invocation) (json.RawMessage, e
 		return nil, callErr
 	}
 
-	rec := &RPCRecord{CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, IdemKey: inv.IdemKey}
+	rec := &RPCRecord{CallKey: key, Capability: inv.Capability, Method: inv.Method, ArgsHash: argsHash, Args: inv.Args, IdemKey: inv.IdemKey}
 	if callErr != nil {
 		rec.Err = callErr.Error()
 	} else {
