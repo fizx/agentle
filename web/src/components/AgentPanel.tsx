@@ -1,16 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { Chat, RunUI } from '../types'
+import type { Chat, RunUI, ToolCall, UIMessage } from '../types'
 import { ChatBubble, Thinking } from './UIPanel'
 
 // AgentPanel docks an autonomous coding assistant beside the editor. Each tab is
-// a durable chat — an execution of the seeded harness script (PLAYTEST5 backend
-// (A)) bound to chat:{script}:{chat}. Every turn carries the live editor buffer
-// as `source`, so the agent reasons over the current code; switching tabs loads
-// that chat's transcript and reopening resumes it.
-export function AgentPanel({ scriptId, getSource, onClose }: {
+// a durable chat — an execution of the seeded harness script bound to
+// chat:{script}:{chat}. Every turn carries the live editor buffer as `source`.
+//
+// The agent has editor tools (read_source / apply_edit / run): the harness emits
+// a tool batch (ui.pending_tools), this panel executes it client-side — reading
+// the buffer, applying edits via onApply, running via onRun — and posts the
+// results back, so the round-trip is durable + replay-safe. See PLAYTEST5.md.
+export function AgentPanel({ scriptId, getSource, onApply, onRun, onClose }: {
   scriptId: string
   getSource: () => string
+  onApply: (source: string) => void
+  onRun: (input: unknown) => Promise<string>
   onClose: () => void
 }) {
   const [chats, setChats] = useState<Chat[]>([])
@@ -20,6 +25,8 @@ export function AgentPanel({ scriptId, getSource, onClose }: {
   const [busy, setBusy] = useState(false)
   const [renaming, setRenaming] = useState<string>('')
   const bottom = useRef<HTMLDivElement>(null)
+  const handledBatch = useRef<string>('') // dedup: tool batches this panel already ran
+  const runningTools = useRef(false)
 
   const active = chats.find((c) => c.id === activeId) || null
 
@@ -56,9 +63,47 @@ export function AgentPanel({ scriptId, getSource, onClose }: {
     return () => clearInterval(t)
   }, [poll])
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: 'smooth' }) }, [ui?.transcript.length, ui?.awaiting, activeId])
+  // Batches are numbered per-execution, so reset the dedup marker on tab switch.
+  useEffect(() => { handledBatch.current = ''; runningTools.current = false }, [active?.exec_id])
+
+  // Execute a pending editor-tool batch client-side, then post the results back.
+  useEffect(() => {
+    const pt = ui?.pending_tools
+    if (!active || !pt || pt.batch === handledBatch.current || runningTools.current) return
+    runningTools.current = true
+    const execId = active.exec_id
+    ;(async () => {
+      const results = []
+      for (const c of pt.calls) {
+        results.push({ id: c.id, name: c.name, content: await runTool(c) })
+      }
+      handledBatch.current = pt.batch
+      try { await api.postMessage(execId, { tool_results: results, batch: pt.batch }) } finally {
+        runningTools.current = false
+        poll()
+      }
+    })()
+  }, [ui?.pending_tools?.batch, active?.exec_id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // runTool fulfils one editor tool call in the browser and returns its result
+  // string (fed back to the model as the tool message content).
+  const runTool = async (c: ToolCall): Promise<string> => {
+    try {
+      if (c.name === 'read_source') return getSource()
+      if (c.name === 'apply_edit') {
+        const src = String((c.arguments?.source as string) ?? '')
+        if (!src.trim()) return 'error: apply_edit needs a non-empty "source" (the complete new file)'
+        onApply(src)
+        return 'applied — buffer is now ' + src.split('\n').length + ' lines'
+      }
+      if (c.name === 'run') return await onRun(c.arguments?.input ?? null)
+      return 'error: unknown tool ' + c.name
+    } catch (e) { return 'error: ' + (e as Error).message }
+  }
 
   const done = ui ? ui.status === 1 || ui.status === 2 : false // completed | failed
-  const thinking = busy || (!!ui && !done && !ui.awaiting)
+  const runningTool = !!ui?.pending_tools
+  const thinking = busy || runningTool || (!!ui && !done && !ui.awaiting)
 
   const send = async () => {
     if (!text.trim() || busy || !active || done) return
@@ -125,7 +170,10 @@ export function AgentPanel({ scriptId, getSource, onClose }: {
             Ask the assistant to write or explain this script. The current editor contents are sent with every message.
           </div>
         )}
-        {(ui?.transcript || []).map((m, i) => <ChatBubble key={i} m={m} />)}
+        {(ui?.transcript || []).map((m, i) =>
+          m.role === 'tool'
+            ? <ToolCard key={i} m={m} pendingBatch={ui?.pending_tools?.batch} />
+            : <ChatBubble key={i} m={m} />)}
         {thinking && <Thinking />}
         {done && <div className="muted agent-ended">This chat ended. Open a new one with +.</div>}
         <div ref={bottom} />
@@ -141,6 +189,26 @@ export function AgentPanel({ scriptId, getSource, onClose }: {
           ? <button onClick={stop} title="End this chat">Stop</button>
           : <button className="primary" onClick={send} disabled={busy || done || !ui?.awaiting}>Send</button>}
       </div>
+    </div>
+  )
+}
+
+// ToolCard renders an editor-tool batch (read_source / apply_edit / run) the agent
+// requested. The batch still in ui.pending_tools is "running"; older ones are done.
+const TOOL_ICON: Record<string, string> = { read_source: '👁', apply_edit: '✏️', run: '▶️' }
+function ToolCard({ m, pendingBatch }: { m: UIMessage; pendingBatch?: string }) {
+  const block = (m.blocks || []).find((b) => b.type === 'tool_calls')
+  const calls: ToolCall[] = (block?.calls as ToolCall[]) || []
+  const running = !!block?.batch && block.batch === pendingBatch
+  return (
+    <div className="agent-tool-card">
+      {calls.map((c, i) => (
+        <div key={i} className="agent-tool-row">
+          <span className="agent-tool-name">{TOOL_ICON[c.name] || '🔧'} {c.name}</span>
+          {c.name === 'apply_edit' && <span className="muted agent-tool-arg">edit buffer</span>}
+          <span className={'agent-tool-status' + (running ? ' running' : '')}>{running ? '…' : '✓'}</span>
+        </div>
+      ))}
     </div>
   )
 }

@@ -1,7 +1,7 @@
 - browser history # integration throughout so the back button works
 - keep default as scripts
 - do ui elements supercede each other?  how does it work when i call chat then form?  is this a stack?  to me, a stack makes sense (i.e. form modals over the chat), and then there needs to be some way to clear/pop.
-- rather than mocking LLMs, can we integrate with ollama
+- rather than mocking LLMs, can we integrate with ollama and/or openai
 
 ---
 
@@ -18,25 +18,36 @@
 >   dashboard renders the top form as a modal over the chat. New `stacked_ui`
 >   example + tests. (`internal/vm/std_ui.go`, `internal/platform/ui.go`,
 >   `web/src/components/UIPanel.tsx`)
-> - **Coding agent — Phase 1 built; real LLM via an OpenAI-compatible backend.**
->   The harness is a real agentle script (`coding_agent` example) with the system
->   prompt baked in. The old blocker — "no real LLM offline, the mock only echoes,
->   so it can't author code" — is **resolved by pointing the `llm` capability at
->   any OpenAI-compatible server**: a local Ollama (no API key; models already
->   pulled here incl. `qwen2.5-coder:32b`) for offline/testing, or real OpenAI /
->   another hosted provider otherwise (`internal/caps/llm.go` now uses the real
->   client whenever `base_url` is set). **Phase 1 of the editor agent is built and
->   verified end-to-end against Ollama:** a docked split-pane Assistant in the
->   Scripts editor with an N-chats-per-script **tab strip** (create / switch /
->   double-click rename / auto-title / close), each tab a durable harness execution
->   bound to `chat:{script}:{chat}`; every turn carries the live buffer as
->   `source`; a working indicator + Stop. Seeded `ollama` config + `coding-assistant`
->   harness (hidden from the script list). (`internal/store/chat.go`,
->   `internal/api/chats.go`, `cmd/agentle/seed.go`, `web/src/components/AgentPanel.tsx`,
->   `web/src/views/Scripts.tsx`) Remaining (later phases): the agent *applying*
->   edits as inline diffs (apply/undo) + a `run` editor tool + run-result cards —
->   these need the harness to emit structured editor-tool calls (the
->   `read_source`/`apply_edit`/`run` vocabulary), not just chat replies.
+> - **Coding agent — Phases 1 + 2 built; real LLM via any OpenAI-compatible backend.**
+>   The harness is a real agentle script (`coding_agent` example). The old blocker —
+>   "no real LLM offline, the mock only echoes" — is **resolved by pointing the
+>   `llm` capability at any OpenAI-compatible server**: local Ollama (no key;
+>   `qwen2.5-coder:32b`, `llama3-groq-tool-use:8b`) offline, or **real OpenAI** via
+>   `OPENAI_API_KEY` (+ `OPENAI_MODEL`, e.g. `gpt-5.5`) — `seed.go` wires an `openai`
+>   config and grants it to the harness automatically. `internal/caps/llm.go` uses
+>   the real client whenever `base_url` is set, and now only sends `temperature`
+>   when the script set it explicitly (GPT-5.x / o-series reject a non-default
+>   temperature).
+>   - **Phase 1 (chat panel):** a docked split-pane Assistant in the Scripts editor
+>     with an N-chats-per-script **tab strip** (create / switch / double-click
+>     rename / auto-title / close); each tab a durable harness execution bound to
+>     `chat:{script}:{chat}`; every turn carries the live buffer as `source`;
+>     working indicator + Stop. (`internal/store/chat.go`, `internal/api/chats.go`,
+>     `web/src/components/AgentPanel.tsx`, `web/src/views/Scripts.tsx`)
+>   - **Phase 2 (editor tools):** the agent has **`read_source` / `apply_edit` /
+>     `run`** tools. The harness runs an `llm(tools=…)` loop, emits a tool batch via
+>     `ui_tools` (projected as `pending_tools`), and the panel executes it
+>     client-side — reading the live buffer, applying edits into CodeMirror, running
+>     the edited script via the run API — then posts results back through the inbox
+>     (durable + replay-safe). Tool-call cards render in the transcript.
+>     Verified three ways: a deterministic mock round-trip test
+>     (`TestCodingAgentToolLoop`), an Ollama `qwen2.5-coder:32b` run, and **OpenAI
+>     `gpt-5.5`** driving a clean read→edit→run loop that actually changed the buffer
+>     (browser-confirmed). (`internal/vm/std_ui.go` `ui_tools`,
+>     `internal/platform/ui.go` `pending_tools`, `internal/examples/examples.go`)
+>   - Remaining polish (later): inline diff rendering for `apply_edit` (currently
+>     full-buffer replace + CodeMirror undo) and tightening the tool-loop step cap
+>     (weaker models can re-edit/re-run up to the bound).
 
 ---
 

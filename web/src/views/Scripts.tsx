@@ -105,6 +105,38 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
     } catch (e) { setErr((e as Error).message) } finally { setBusy(false) }
   }
 
+  // runForAgent backs the assistant's `run` editor tool: persist the live buffer
+  // (so we run exactly what's shown), run it as this script with its grants, wait
+  // for a terminal status, surface it in the Result card, and return a compact
+  // summary (status + output/error + trace) for the model.
+  const runForAgent = async (rawInput: unknown): Promise<string> => {
+    if (!sel) return 'no script selected'
+    const input = rawInput && typeof rawInput === 'object' ? rawInput : null
+    try {
+      const latest = detail?.versions?.[0]
+      if (!latest || latest.source !== source) await api.saveVersion(sel, source, grantRefs())
+    } catch (e) { return 'save failed: ' + (e as Error).message }
+    let exe: Execution
+    try { exe = await api.run(sel, input) } catch (e) { return 'run failed: ' + (e as Error).message }
+    for (let i = 0; i < 60 && exe.status === 0; i++) {
+      await new Promise((r) => setTimeout(r, 400))
+      try { exe = await api.getExecution(exe.id) } catch { break }
+    }
+    setResult(exe)
+    try { setDetail(await api.getScript(sel)) } catch { /* keep prior detail */ }
+    const statusName = ['running', 'completed', 'failed', 'suspended'][exe.status] ?? String(exe.status)
+    let trace = ''
+    try {
+      const t = await api.getTrace(exe.id)
+      const caps = Array.from(new Set(t.spans.filter((s) => s.capability).map((s) => s.capability)))
+      const errs = t.spans.filter((s) => s.error).map((s) => s.error)
+      trace = `trace: ${t.spans.length} spans` + (caps.length ? ' (' + caps.join(', ') + ')' : '') +
+        (errs.length ? '; errors: ' + errs.join('; ') : '')
+    } catch { /* no trace */ }
+    const body = exe.error ? 'error: ' + exe.error : 'output: ' + JSON.stringify(exe.output)
+    return `status=${statusName}\n${body}${trace ? '\n' + trace : ''}`
+  }
+
   const del = async () => {
     if (!sel || !confirm('Delete this script and its versions/triggers?')) return
     await api.deleteScript(sel)
@@ -228,7 +260,15 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
                   </table>
                 </div>
                 </div>
-                {assistant && <AgentPanel scriptId={sel} getSource={() => source} onClose={() => setAssistant(false)} />}
+                {assistant && (
+                  <AgentPanel
+                    scriptId={sel}
+                    getSource={() => source}
+                    onApply={setSource}
+                    onRun={runForAgent}
+                    onClose={() => setAssistant(false)}
+                  />
+                )}
               </div>
             )}
 

@@ -47,7 +47,7 @@ func LLM(cfg LLMConfig) engine.Executor {
 		var a struct {
 			Messages    []map[string]any `json:"messages"`
 			Model       string           `json:"model"`
-			Temperature float64          `json:"temperature"`
+			Temperature *float64         `json:"temperature"` // nil = let the provider default (some models reject non-default)
 			Tools       []map[string]any `json:"tools"`
 		}
 		if err := json.Unmarshal(inv.Args, &a); err != nil {
@@ -62,9 +62,11 @@ func LLM(cfg LLMConfig) engine.Executor {
 			return mockChat(a.Messages, tools, model)
 		}
 		body := map[string]any{
-			"model":       model,
-			"messages":    toWireMessages(a.Messages),
-			"temperature": a.Temperature,
+			"model":    model,
+			"messages": toWireMessages(a.Messages),
+		}
+		if a.Temperature != nil {
+			body["temperature"] = *a.Temperature
 		}
 		if len(tools) > 0 {
 			body["tools"] = tools

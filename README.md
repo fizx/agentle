@@ -122,18 +122,29 @@ The Scripts editor has a docked **✨ Assistant** panel (split beside CodeMirror
 an autonomous coding agent that helps you write/debug the open script. It's
 **self-hosting** — the agent harness is itself an agentle script (the seeded
 `coding-assistant`, from the `coding_agent` example), so each chat is a durable,
-replayable, cost-tracked execution bound to `chat:{script}:{chat}`. Every turn
-carries the live editor buffer, so the agent reasons over your current code.
-There are **N chats per script** in a tab strip (create / switch / double-click
-rename / auto-title / close), plus a working indicator and Stop.
+replayable, cost-tracked execution bound to `chat:{script}:{chat}`. There are
+**N chats per script** in a tab strip (create / switch / double-click rename /
+auto-title / close), plus a working indicator and Stop.
+
+**Editor tools.** Every turn carries the live editor buffer, and the agent has
+real tools — **`read_source`**, **`apply_edit`** (replace the buffer; auto-applied
+to CodeMirror with undo), and **`run`** (run the edited script, returning output +
+trace). The harness runs an `llm(tools=…)` loop and emits a tool batch; the panel
+executes it in the browser and posts the results back through the inbox (durable +
+replay-safe), rendering a tool-call card for each. So the agent can actually read,
+edit, and run your code, not just chat about it.
 
 The brain is the `llm` capability, which speaks the OpenAI chat-completions
-format — point it at **any OpenAI-compatible endpoint**. For a real agent fully
-offline, run a local **Ollama** server (`base_url: http://localhost:11434/v1`,
-e.g. `model: qwen2.5-coder:32b`, no API key needed); the seeded `ollama` config +
-harness grant make it work out of the box when Ollama is up. A hosted provider
-works the same way with a `base_url` + key. The offline mock only echoes (it
-can't author code), so it's selected only when no `base_url` is configured.
+format — point it at **any OpenAI-compatible endpoint**:
+- **Local Ollama** (offline, no key): `base_url: http://localhost:11434/v1`, e.g.
+  `model: qwen2.5-coder:32b` or `llama3-groq-tool-use:8b`. The seeded `ollama`
+  config + harness grant make it work out of the box when Ollama is up.
+- **OpenAI / hosted**: set `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`, e.g.
+  `gpt-5.5`) before first start; the seed wires an `openai` config and grants it to
+  the assistant. Use a tool-capable model so `apply_edit`/`run` work.
+
+The offline mock only echoes (it can't author code), so it's selected only when no
+`base_url` is configured.
 
 ## Pluggable secrets
 

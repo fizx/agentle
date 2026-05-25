@@ -207,3 +207,12 @@ h3 { font-size: 14px; margin: 0 0 8px; }
 .agent-ended { text-align: center; padding: 8px 0; font-size: 12px; }
 .agent-composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); }
 .agent-composer input { flex: 1; padding: 8px 10px; border-radius: 8px; }
+
+/* editor-agent tool-call cards (read_source / apply_edit / run) */
+.chat-msg.them.thinking-msg { background: var(--panel2); }
+.agent-tool-card { align-self: flex-start; max-width: 85%; display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }
+.agent-tool-row { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.agent-tool-name { font-family: ui-monospace, monospace; }
+.agent-tool-arg { font-size: 11px; }
+.agent-tool-status { margin-left: auto; color: var(--green); }
+.agent-tool-status.running { color: var(--yellow); }

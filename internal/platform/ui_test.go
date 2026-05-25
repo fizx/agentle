@@ -44,11 +44,15 @@ func TestUIFormSubmit(t *testing.T) {
 	}
 }
 
-func TestCodingAgentHarness(t *testing.T) {
+// TestCodingAgentToolLoop drives the full editor-tool round-trip with the offline
+// mock: a user turn → the model emits a tool call → the projection surfaces it as
+// pending → the client posts results → the model gives a final answer. This
+// verifies the Phase 2 plumbing (pending_tools, transcript suppression of tool
+// deliveries, batch clearing) without needing a real tool-capable model.
+func TestCodingAgentToolLoop(t *testing.T) {
 	s := newService(t)
 	ctx := context.Background()
 
-	// Backend (A): the coding assistant is itself an agentle script (llm-backed).
 	if err := s.Store.PutToolConfig(ctx, store.ToolConfig{ID: "llm-mock", Capability: "llm", Config: json.RawMessage(`{}`)}); err != nil {
 		t.Fatal(err)
 	}
@@ -60,19 +64,48 @@ func TestCodingAgentHarness(t *testing.T) {
 		t.Fatalf("expected chat panel, got %+v", ui.Panels)
 	}
 
-	// The editor sends {text, source}; the harness feeds the source to the LLM.
+	// A user turn carrying the live buffer. Handed tools, the mock responds with a
+	// tool call; the harness emits it and parks awaiting the client's results.
 	if err := s.PostMessage(ctx, exe.ID, json.RawMessage(`{"text":"add a log line","source":"def main(input):\n    return {}"}`)); err != nil {
 		t.Fatal(err)
 	}
 	ui, _ := s.GetUI(ctx, exe.ID)
+	if ui.PendingTools == nil || len(ui.PendingTools.Calls) == 0 {
+		t.Fatalf("expected pending editor tool calls, got %+v", ui)
+	}
+	call := ui.PendingTools.Calls[0].(map[string]any)
+	if call["name"] != "read_source" {
+		t.Fatalf("expected mock to call read_source first, got %v", call["name"])
+	}
+
+	// The client executes the tool and posts the result under the same batch.
+	results, _ := json.Marshal(map[string]any{
+		"batch": ui.PendingTools.Batch,
+		"tool_results": []map[string]any{
+			{"id": call["id"], "name": "read_source", "content": "def main(input):\n    return {}"},
+		},
+	})
+	if err := s.PostMessage(ctx, exe.ID, results); err != nil {
+		t.Fatal(err)
+	}
+	ui, _ = s.GetUI(ctx, exe.ID)
+	if ui.PendingTools != nil {
+		t.Fatalf("expected pending tools cleared once results were posted, got %+v", ui.PendingTools)
+	}
+	// The tool-results delivery must not appear as a user message.
+	for _, m := range ui.Transcript {
+		if m.Role == "user" && strings.Contains(m.Text, "tool_results") {
+			t.Fatalf("tool-results delivery leaked into the user transcript: %+v", m)
+		}
+	}
 	var replied bool
 	for _, m := range ui.Transcript {
-		if m.Role == "assistant" && strings.Contains(m.Text, "add a log line") { // mock echoes the user content (which includes the source)
+		if m.Role == "assistant" && m.Text != "" {
 			replied = true
 		}
 	}
 	if !replied {
-		t.Fatalf("expected an assistant reply referencing the request: %+v", ui.Transcript)
+		t.Fatalf("expected an assistant reply after the tool round-trip: %+v", ui.Transcript)
 	}
 }
 

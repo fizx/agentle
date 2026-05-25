@@ -10,6 +10,7 @@ import (
 var groupUI = []Builtin{
 	{Name: "ui_chat", Group: "ui", Doc: "ui_chat(title='', intro=''): push a chat panel (drive with recv()/ui_say())", Fn: bUIChat},
 	{Name: "ui_say", Group: "ui", Doc: "ui_say(text, role='assistant', blocks=None): append a message to the UI transcript (markdown + typed blocks)", Fn: bUISay},
+	{Name: "ui_tools", Group: "ui", Doc: "ui_tools(calls, batch): ask the client to run editor tool calls [{id,name,arguments}]; recv() the {tool_results,batch} reply", Fn: bUITools},
 	{Name: "ui_form", Group: "ui", Doc: "ui_form(fields) -> values: push a form (modal over any chat), suspend until submitted, then pop it", Fn: bUIForm},
 	{Name: "ui_pop", Group: "ui", Doc: "ui_pop(): pop the top UI panel off the stack", Fn: bUIPop},
 	{Name: "ui_clear", Group: "ui", Doc: "ui_clear(): remove all UI panels", Fn: bUIClear},
@@ -45,6 +46,26 @@ func bUISay(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs
 		payload["blocks"] = bv
 	}
 	if _, err := callCap(t, "ui", "say", payload, true, false); err != nil {
+		return nil, err
+	}
+	return starlark.None, nil
+}
+
+// bUITools emits a batch of editor tool calls for the dashboard to execute
+// client-side (read_source / apply_edit / run). The script then recv()s the
+// {tool_results, batch} reply the client posts back, so the round-trip is durable
+// (the result is memoized on the inbox) and replay-safe.
+func bUITools(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var calls starlark.Value
+	var batch string
+	if err := starlark.UnpackArgs("ui_tools", args, kwargs, "calls", &calls, "batch", &batch); err != nil {
+		return nil, err
+	}
+	cv, err := starlarkToGo(calls)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := callCap(t, "ui", "tools", map[string]any{"kind": "tools", "batch": batch, "calls": cv}, true, false); err != nil {
 		return nil, err
 	}
 	return starlark.None, nil

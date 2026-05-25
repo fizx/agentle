@@ -59,7 +59,7 @@ func seed(ctx context.Context, st *store.Store, log *slog.Logger) error {
 			return err
 		}
 		base := envOr("OPENAI_BASE_URL", "https://api.openai.com/v1")
-		model := envOr("OPENAI_MODEL", "gpt-4o-mini")
+		model := envOr("OPENAI_MODEL", "gpt-5.5")
 		cfg, _ := json.Marshal(map[string]any{"base_url": base, "model": model})
 		if err := st.PutToolConfig(ctx, store.ToolConfig{ID: "openai", Capability: "llm", Config: cfg, SecretRef: "OPENAI_API_KEY"}); err != nil {
 			return err

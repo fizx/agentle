@@ -117,13 +117,26 @@ export interface UIMessage {
 }
 
 export interface UIBlock {
-  type: string // code | table | image
+  type: string // code | table | image | tool_calls
   lang?: string
   text?: string
   columns?: string[]
   rows?: string[][]
   url?: string
   alt?: string
+  batch?: string // tool_calls
+  calls?: ToolCall[] // tool_calls
+}
+
+export interface ToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export interface ToolBatch {
+  batch: string
+  calls: ToolCall[]
 }
 
 export interface UIField {
@@ -151,6 +164,7 @@ export interface RunUI {
   transcript: UIMessage[]
   status: number
   awaiting: boolean
+  pending_tools?: ToolBatch // editor tool calls awaiting client execution
 }
 
 export interface AppInfo {

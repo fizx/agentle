@@ -180,41 +180,77 @@ def main(input):
 	{
 		ID:           "coding_agent",
 		Title:        "Coding assistant (self-hosted)",
-		Description:  "A chat agent that helps write/fix an agentle script. Backend (A) from PLAYTEST5: the harness is this script, the brain is llm(). The editor sends your message + current source each turn.",
+		Description:  "An autonomous coding agent with EDITOR TOOLS: it can read_source, apply_edit, and run the script you're editing. Powers the in-editor ✨ Assistant panel. Grant llm and point it at a tool-capable model (e.g. Ollama qwen2.5-coder:32b).",
 		Capabilities: []string{"llm"},
-		Source: "# A self-hosted coding assistant for agentle scripts. The editor sends your\n" +
-			"# message plus the current `main.star` source each turn (as data.source); the\n" +
-			"# harness asks the LLM and replies. Swap the mock for a real model to make it\n" +
-			"# genuinely useful. See PLAYTEST5.md for the full design + system prompt.\n" +
-			"SYSTEM = \"\"\"You are the coding assistant inside agentle, a platform for DURABLE AGENTS.\n" +
-			"You help the user write and debug ONE agentle script, main.star. This is NOT a normal\n" +
-			"Python project: scripts are Starlark (a deterministic Python dialect) run by a REPLAY\n" +
-			"engine — no imports, classes, while, recursion, try/except, open(), or network except\n" +
-			"through granted capabilities (llm, http_get, shell, mcp_call; always-on: log, now, rand,\n" +
-			"store, fetch, send, recv, deadline, parallel_map, ui_chat, ui_say, ui_form). The entry\n" +
-			"point is def main(input): and input is the event envelope {id,kind,workspace,data}.\n" +
-			"recv()/ui_form()/deadline() are durable suspend points; loop with bounded for-range, never\n" +
-			"while True. Propose minimal edits to main.star and explain briefly.\"\"\"\n" +
-			"\n" +
-			"def main(input):\n" +
-			"    ui_chat(title=\"Coding assistant\", intro=\"Ask me to write or fix this agentle script. /quit to end.\")\n" +
-			"    history = [{\"role\": \"system\", \"content\": SYSTEM}]\n" +
-			"    for _ in range(100):\n" +
-			"        msg = recv()\n" +
-			"        if msg == None:\n" +
-			"            break\n" +
-			"        text = (msg.get(\"text\") or \"\").strip()\n" +
-			"        if text == \"/quit\":\n" +
-			"            break\n" +
-			"        source = msg.get(\"source\") or \"\"\n" +
-			"        user = text\n" +
-			"        if source:\n" +
-			"            user += \"\\n\\nCurrent main.star:\\n```\\n\" + source + \"\\n```\"\n" +
-			"        history.append({\"role\": \"user\", \"content\": user})\n" +
-			"        reply = llm(history)\n" +
-			"        history.append({\"role\": \"assistant\", \"content\": reply[\"content\"]})\n" +
-			"        ui_say(reply[\"content\"])\n" +
-			"    return {\"turns\": (len(history) - 1) // 2}\n",
+		Source: `# A self-hosted coding assistant with EDITOR TOOLS. Each turn the editor sends
+# your message + the live buffer (data.source); the model may call read_source /
+# apply_edit / run, which the dashboard executes client-side and feeds back via the
+# inbox (so the round-trip is durable + replay-safe). Point the llm grant at a
+# tool-capable model. See PLAYTEST5.md for the full design.
+SYSTEM = """You are the coding assistant inside agentle, helping write and debug ONE
+agentle script, main.star. It is Starlark (a deterministic Python dialect) run by a
+REPLAY engine — no imports, classes, while, recursion, try/except, open(), or network
+except through granted capabilities (llm, http_get, shell, mcp_call; always-on: log,
+now, rand, store, fetch, send, recv, deadline, parallel_map, ui_chat, ui_say, ui_form).
+Entry point: def main(input): with input the event envelope {id,kind,workspace,data}.
+
+You have EDITOR TOOLS. You MUST act through them — never paste code in your text reply:
+- read_source(): the current main.star buffer.
+- apply_edit(source): to CHANGE the file, CALL THIS with the COMPLETE new source (not
+  a diff, not a snippet). This is the ONLY way to edit; do not write code in chat.
+- run(input): run the current main.star; returns status, output, and a short trace.
+Workflow: make the change with apply_edit, then call run to verify, then briefly (1-2
+sentences, no code blocks) report what you did and the result. The current buffer is
+provided below for reference. Keep main.star valid Starlark with a main(input) function."""
+
+TOOLS = [
+    {"name": "read_source",
+     "description": "Return the current full contents of main.star (the editor buffer).",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "apply_edit",
+     "description": "Replace the entire main.star buffer with new full source. Provide the COMPLETE file, not a diff.",
+     "inputSchema": {"type": "object",
+                     "properties": {"source": {"type": "string", "description": "the complete new main.star"}},
+                     "required": ["source"]}},
+    {"name": "run",
+     "description": "Run the current main.star and return its output and a short execution trace.",
+     "inputSchema": {"type": "object",
+                     "properties": {"input": {"type": "object", "description": "optional JSON placed at event.data"}}}},
+]
+
+def main(input):
+    ui_chat(title="Coding assistant", intro="Ask me to write, fix, or run this script. I can read it, edit it, and run it. /quit to end.")
+    history = [{"role": "system", "content": SYSTEM}]
+    step = 0
+    for _ in range(40):
+        msg = recv()
+        if msg == None:
+            break
+        text = (msg.get("text") or "").strip()
+        if text == "/quit":
+            break
+        source = msg.get("source") or ""
+        user = text
+        if source:
+            user += "\n\nCurrent main.star:\n<source>\n" + source + "\n</source>"
+        history.append({"role": "user", "content": user})
+        for _ in range(8):  # bounded tool loop within a turn
+            reply = llm(history, tools=TOOLS)
+            calls = reply.get("tool_calls")
+            if not calls:
+                ui_say(reply.get("content") or "(no reply)")
+                break
+            history.append({"role": "assistant", "content": reply.get("content", ""), "tool_calls": calls})
+            step += 1
+            ui_tools(calls, str(step))            # the dashboard runs the tools…
+            res = deadline(120, lambda: recv())   # …and posts {tool_results, batch} back
+            if res == None:
+                ui_say("(timed out waiting for editor tools)")
+                break
+            for r in (res.get("tool_results") or []):
+                history.append({"role": "tool", "tool_call_id": r.get("id"), "name": r.get("name", ""), "content": r.get("content", "")})
+    return {"steps": step}
+`,
 	},
 	{
 		ID:           "stacked_ui",

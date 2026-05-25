@@ -53,7 +53,13 @@ func bLLM(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs [
 	if err != nil {
 		return nil, err
 	}
-	payload := map[string]any{"messages": msgs, "model": model, "temperature": temperature}
+	payload := map[string]any{"messages": msgs, "model": model}
+	// Only forward temperature when the script set it explicitly (positional index
+	// 2, or the keyword). Some models — OpenAI gpt-5.x / o-series — reject any
+	// non-default temperature, so we must omit it rather than send 0.
+	if argProvided(args, kwargs, 2, "temperature") {
+		payload["temperature"] = temperature
+	}
 	if tools != nil && tools != starlark.None {
 		tv, err := starlarkToGo(tools)
 		if err != nil {
@@ -67,6 +73,21 @@ func bLLM(t *starlark.Thread, _ *starlark.Builtin, args starlark.Tuple, kwargs [
 		payload["tools"] = def
 	}
 	return callCap(t, "llm", "chat", payload, true, false)
+}
+
+// argProvided reports whether an optional arg was supplied either positionally
+// (at index pos) or by keyword name — so the caller can distinguish "set to the
+// zero value" from "not set".
+func argProvided(args starlark.Tuple, kwargs []starlark.Tuple, pos int, name string) bool {
+	if len(args) > pos {
+		return true
+	}
+	for _, kv := range kwargs {
+		if s, ok := kv[0].(starlark.String); ok && string(s) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // defaultMCPTools returns the granted MCP servers' tools as the LLM's default tool
