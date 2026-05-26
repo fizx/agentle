@@ -271,9 +271,20 @@ export interface AppInfo {
 export interface Plugin {
   id: string
   name: string
-  runtime: string // python | node | bash
+  kind: string // script | native
+  runtime: string // python | node | bash | native
   source: string
   enabled: boolean
+  current_version: number
+  created_at: number
+}
+
+export interface PluginVersion {
+  plugin_id: string
+  version: number
+  runtime: string
+  source: string
+  note?: string
   created_at: number
 }
 

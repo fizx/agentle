@@ -77,7 +77,7 @@ func run(addr, dataDir string, log *slog.Logger) error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := seed(ctx, st, log); err != nil {
+	if err := seed(ctx, st, svc, log); err != nil {
 		return err
 	}
 

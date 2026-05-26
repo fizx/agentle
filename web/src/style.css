@@ -225,6 +225,31 @@ h3 { font-size: 14px; margin: 0 0 8px; }
 .agent-composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--border); }
 .agent-composer input { flex: 1; padding: 8px 10px; border-radius: 8px; }
 
+/* --- docs tab (single page + sticky TOC) --- */
+.docs-toc { width: 230px; }
+.docs-toc .toc-link {
+  display: block; padding: 5px 8px; border-radius: 6px; color: var(--muted);
+  font-size: 13px; cursor: pointer; border: 1px solid transparent;
+}
+.docs-toc .toc-link:hover { background: var(--panel2); color: var(--text); }
+.docs-toc .toc-link.active { color: var(--text); background: var(--panel2); border-color: var(--accent); }
+.docs-toc .toc-sub { padding-left: 16px; font-size: 12px; }
+/* The scroll container is full-width .main; an inner wrapper caps the reading
+   width, so the scrollbar stays at the viewport edge (not floating mid-screen). */
+.docs-body { max-width: 880px; }
+.docs-main section { scroll-margin-top: 12px; margin-bottom: 30px; }
+.docs-main .docs-sub { scroll-margin-top: 12px; }
+.docs-main h1 { font-size: 22px; margin: 0 0 6px; }
+.docs-main h2 { font-size: 18px; margin: 26px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.docs-main h3 { font-size: 15px; margin: 16px 0 6px; }
+.docs-main p, .docs-main li { color: var(--text); }
+.docs-main code { background: rgba(127,127,127,.18); padding: 1px 5px; border-radius: 4px; font-family: ui-monospace, monospace; font-size: 12.5px; }
+.docs-main pre code { background: none; padding: 0; }
+.docs-lead { color: var(--muted); font-size: 15px; }
+.docs-cap { border-bottom: 1px solid var(--border); padding: 8px 0; }
+.docs-cap .mono { color: var(--accent); }
+.docs-pill { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); margin-left: 6px; }
+
 /* editor-agent tool-call cards (read_source / apply_edit / run) */
 .chat-msg.them.thinking-msg { background: var(--panel2); }
 .agent-tool-card { align-self: flex-start; max-width: 85%; display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel2); }

@@ -1,0 +1,7 @@
+- can we seed a full set of virtual eval fixtures to make playtesting easier?
+- an evals tab under scripts too please?
+- why can't i promote from the scripts>runs tab
+- when tabs are mirrored from global to per-script, share the code/ui/etc.
+- can plugins also be implemented in go natively?  They'd appear in the plugins list, but not be editable.
+- plugins should probably be versioned.
+- Please add a docs tab.  This should be a single html page with a TOC, and should explain how to use everything, beginning with quickstarts and examples, and later moving into reference docs.  please feel free to make this a combination of manual and generated (for reference), if that helps.

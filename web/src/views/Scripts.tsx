@@ -8,12 +8,14 @@ import { CodeEditor } from '../components/CodeEditor'
 import { PromptModal } from '../components/Modal'
 import { UIPanel } from '../components/UIPanel'
 import { AgentPanel } from '../components/AgentPanel'
+import { RunDetail } from './Runs'
+import { EvalsPanel } from './Evals'
 
 // The seeded coding-assistant harness backs the in-editor agent panel; hide it
 // from the script list so it reads as a feature, not user content.
 const HARNESS_SCRIPT = 'sc_coding_assistant'
 
-type Sub = 'editor' | 'runs' | 'triggers' | 'secrets'
+type Sub = 'editor' | 'runs' | 'evals' | 'triggers' | 'secrets'
 
 export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void }) {
   const [scripts, setScripts] = useState<Script[]>([])
@@ -189,7 +191,7 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
     window.addEventListener('mouseup', onUp)
   }
 
-  const subTabs: Sub[] = ['editor', 'runs', 'triggers', 'secrets']
+  const subTabs: Sub[] = ['editor', 'runs', 'evals', 'triggers', 'secrets']
 
   return (
     <div className="layout">
@@ -321,7 +323,8 @@ export default function Scripts({ onOpenRun }: { onOpenRun: (id: string) => void
               </div>
             )}
 
-            {sub === 'runs' && <ScriptRuns scriptId={sel} onOpenRun={onOpenRun} />}
+            {sub === 'runs' && <ScriptRuns scriptId={sel} />}
+            {sub === 'evals' && <EvalsPanel scriptId={sel} onOpenRun={onOpenRun} />}
             {sub === 'triggers' && <ScriptTriggers scriptId={sel} />}
             {sub === 'secrets' && <ScriptSecrets scriptId={sel} />}
           </>
@@ -380,30 +383,41 @@ function ExampleGallery({ onCreate, onPrompt, onCancel }: { onCreate: (name: str
   )
 }
 
-function ScriptRuns({ scriptId, onOpenRun }: { scriptId: string; onOpenRun: (id: string) => void }) {
+// ScriptRuns lists this script's executions and opens the selected one inline in
+// the shared RunDetail — so Promote / feedback / the trace are all available here,
+// not only in the global Runs tab.
+function ScriptRuns({ scriptId }: { scriptId: string }) {
   const [runs, setRuns] = useState<Execution[]>([])
   const [limit, setLimit] = useState(20)
-  useEffect(() => { api.listExecutions(scriptId, limit, 0).then((r) => setRuns(r || [])) }, [scriptId, limit])
+  const [sel, setSel] = useState<string | null>(null)
+  const refresh = useCallback(() => { api.listExecutions(scriptId, limit, 0).then((r) => setRuns(r || [])) }, [scriptId, limit])
+  useEffect(() => { refresh() }, [refresh])
+  // Keep the list's feedback indicator in sync with edits made in the detail.
+  const onChanged = (e: Execution) => setRuns((xs) => xs.map((x) => (x.id === e.id ? { ...x, feedback: e.feedback } : x)))
   return (
-    <div className="card">
-      <h3>Runs for this script</h3>
-      <table>
-        <thead><tr><th>id</th><th>status</th><th>trigger</th><th>workspace</th><th>when</th></tr></thead>
-        <tbody>
-          {runs.map((e) => (
-            <tr key={e.id} style={{ cursor: 'pointer' }} onClick={() => onOpenRun(e.id)}>
-              <td className="mono">{e.id.slice(3, 11)}</td>
-              <td><StatusBadge status={e.status} /></td>
-              <td className="muted">{e.trigger}</td>
-              <td className="mono muted">{e.workspace}</td>
-              <td className="muted">{new Date(e.created_at / 1e6).toLocaleString()}</td>
-            </tr>
-          ))}
-          {runs.length === 0 && <tr><td colSpan={5} className="muted">no runs yet</td></tr>}
-        </tbody>
-      </table>
-      {runs.length >= limit && <button style={{ marginTop: 8 }} onClick={() => setLimit(limit + 20)}>Load more</button>}
-    </div>
+    <>
+      <div className="card">
+        <h3>Runs for this script</h3>
+        <table>
+          <thead><tr><th>id</th><th>status</th><th /><th>trigger</th><th>workspace</th><th>when</th></tr></thead>
+          <tbody>
+            {runs.map((e) => (
+              <tr key={e.id} className={e.id === sel ? 'active' : ''} style={{ cursor: 'pointer' }} onClick={() => setSel(e.id)}>
+                <td className="mono">{e.id.slice(3, 11)}</td>
+                <td><StatusBadge status={e.status} /></td>
+                <td>{e.feedback === 'up' ? '👍' : e.feedback === 'down' ? '👎' : ''}</td>
+                <td className="muted">{e.trigger}</td>
+                <td className="mono muted">{e.workspace}</td>
+                <td className="muted">{new Date(e.created_at / 1e6).toLocaleString()}</td>
+              </tr>
+            ))}
+            {runs.length === 0 && <tr><td colSpan={6} className="muted">no runs yet</td></tr>}
+          </tbody>
+        </table>
+        {runs.length >= limit && <button style={{ marginTop: 8 }} onClick={() => setLimit(limit + 20)}>Load more</button>}
+      </div>
+      {sel && <RunDetail execId={sel} onChanged={onChanged} />}
+    </>
   )
 }
 

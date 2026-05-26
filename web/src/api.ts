@@ -1,5 +1,5 @@
 import type {
-  ApiToken, AppInfo, CalibrationStats, Capability, Chat, ConsistencyResult, Example, Execution, EvalOpts, EvalResult, EvalSuite, Golden, Plugin, RunUI, Script, ScriptDetail, Spend, ToolConfig, ToolPolicy, Trace, Trigger, User, Version,
+  ApiToken, AppInfo, CalibrationStats, Capability, Chat, ConsistencyResult, Example, Execution, EvalOpts, EvalResult, EvalSuite, Golden, Plugin, PluginVersion, RunUI, Script, ScriptDetail, Spend, ToolConfig, ToolPolicy, Trace, Trigger, User, Version,
 } from './types'
 
 const USER_KEY = 'agentle.user'
@@ -115,6 +115,8 @@ export const api = {
   listPlugins: () => req<Plugin[]>('GET', '/plugins'),
   putPlugin: (p: Partial<Plugin>) => req<Plugin>('PUT', '/plugins', p),
   deletePlugin: (id: string) => req<void>('DELETE', `/plugins/${id}`),
+  listPluginVersions: (id: string) => req<PluginVersion[]>('GET', `/plugins/${id}/versions`),
+  restorePluginVersion: (id: string, v: number) => req<Plugin>('POST', `/plugins/${id}/versions/${v}/restore`),
 }
 
 export interface GrantRefInput {

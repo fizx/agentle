@@ -103,6 +103,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/plugins", s.listPlugins)
 		r.Put("/plugins", s.putPlugin)
 		r.Delete("/plugins/{id}", s.deletePlugin)
+		r.Get("/plugins/{id}/versions", s.listPluginVersions)
+		r.Post("/plugins/{id}/versions/{v}/restore", s.restorePluginVersion)
 
 		r.Get("/secrets", s.listSecrets)
 		r.Put("/secrets", s.putSecret)
@@ -599,26 +601,88 @@ func (s *Server) putPlugin(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "name required")
 		return
 	}
+	// Native plugins are defined in Go, not editable through the API.
+	p.Kind = store.PluginScript
 	if p.ID == "" {
 		p.ID = "pl_" + uuid.NewString()
 		p.Enabled = true
+	} else if existing, err := s.svc.Store.GetPlugin(r.Context(), p.ID); err == nil && existing.Kind == store.PluginNative {
+		httpError(w, http.StatusBadRequest, "native plugins are defined in code and cannot be edited")
+		return
 	}
 	if err := s.svc.Store.PutPlugin(r.Context(), p); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	saved, err := s.svc.Store.GetPlugin(r.Context(), p.ID)
+	writeOrErr(w, saved, err)
 }
 
 func (s *Server) deletePlugin(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
-	if err := s.svc.Store.DeletePlugin(r.Context(), chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	if p, err := s.svc.Store.GetPlugin(r.Context(), id); err == nil && p.Kind == store.PluginNative {
+		httpError(w, http.StatusBadRequest, "native plugins are defined in code and cannot be deleted")
+		return
+	}
+	if err := s.svc.Store.DeletePlugin(r.Context(), id); err != nil {
 		httpError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listPluginVersions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	versions, err := s.svc.Store.ListPluginVersions(r.Context(), chi.URLParam(r, "id"))
+	writeOrErr(w, versions, err)
+}
+
+// restorePluginVersion re-saves an older plugin version's runtime+source as a new
+// version (mirroring script restore). Native plugins are not editable.
+func (s *Server) restorePluginVersion(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	p, err := s.svc.Store.GetPlugin(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "plugin not found")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if p.Kind == store.PluginNative {
+		httpError(w, http.StatusBadRequest, "native plugins are defined in code and cannot be edited")
+		return
+	}
+	ver, err := strconv.ParseUint(chi.URLParam(r, "v"), 10, 64)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "bad version")
+		return
+	}
+	old, err := s.svc.Store.GetPluginVersion(r.Context(), id, ver)
+	if errors.Is(err, store.ErrNotFound) {
+		httpError(w, http.StatusNotFound, "version not found")
+		return
+	}
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	p.Runtime, p.Source = old.Runtime, old.Source
+	if err := s.svc.Store.PutPlugin(r.Context(), *p); err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	saved, err := s.svc.Store.GetPlugin(r.Context(), id)
+	writeOrErr(w, saved, err)
 }
 
 func (s *Server) putConfig(w http.ResponseWriter, r *http.Request) {

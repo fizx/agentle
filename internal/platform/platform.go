@@ -153,7 +153,15 @@ func (s *Service) assembleEnv(ctx context.Context, exec engine.ExecutionID, scri
 				if !p.Enabled {
 					return nil, fmt.Errorf("mcp config %q references disabled plugin %q", cfg.ID, c.PluginID)
 				}
-				srv.Plugin = &caps.PluginSpec{Pool: s.Pool, Runtime: p.Runtime, Source: p.Source}
+				if p.Kind == store.PluginNative {
+					np, ok := caps.NativePluginByID(p.ID)
+					if !ok {
+						return nil, fmt.Errorf("mcp config %q -> native plugin %q not registered", cfg.ID, p.ID)
+					}
+					srv.Plugin = &caps.PluginSpec{Native: np}
+				} else {
+					srv.Plugin = &caps.PluginSpec{Pool: s.Pool, Runtime: p.Runtime, Source: p.Source}
+				}
 			}
 			mcpServers = append(mcpServers, srv)
 			continue

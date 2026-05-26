@@ -7,11 +7,12 @@ import Settings from './views/Settings'
 import Spend from './views/Spend'
 import Plugins from './views/Plugins'
 import Users from './views/Users'
+import Docs from './views/Docs'
 import { api, setUserId } from './api'
 import type { User } from './types'
 
-type Tab = 'scripts' | 'apps' | 'runs' | 'evals' | 'spend' | 'settings' | 'plugins' | 'users'
-const ALL_TABS: Tab[] = ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'plugins', 'users']
+type Tab = 'scripts' | 'apps' | 'runs' | 'evals' | 'spend' | 'settings' | 'plugins' | 'users' | 'docs'
+const ALL_TABS: Tab[] = ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'plugins', 'users', 'docs']
 
 // The active tab (and, for runs, the focused execution) lives in the URL hash so
 // the browser back/forward buttons navigate between views. e.g. "#runs/ex_123".
@@ -48,8 +49,8 @@ export default function App() {
 
   const isAdmin = me?.role === 'admin'
   const tabs: Tab[] = isAdmin
-    ? ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'plugins', 'users']
-    : ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings']
+    ? ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'plugins', 'users', 'docs']
+    : ['scripts', 'apps', 'runs', 'evals', 'spend', 'settings', 'docs']
 
   return (
     <>
@@ -78,6 +79,7 @@ export default function App() {
       {tab === 'settings' && <Settings />}
       {tab === 'plugins' && <Plugins />}
       {tab === 'users' && <Users onChange={loadIdentity} me={me} />}
+      {tab === 'docs' && <Docs />}
     </>
   )
 }

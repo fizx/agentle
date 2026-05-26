@@ -26,13 +26,16 @@ type MCPServer struct {
 	Plugin   *PluginSpec // set => tools are provided by a sandboxed subprocess plugin
 }
 
-// PluginSpec describes an agentle-managed plugin that provides MCP tools by being
-// run, per call, in the sandbox: argv[1]="list" prints the tool catalog; "call"
-// with the tool name + args-JSON prints the result.
+// PluginSpec describes an agentle-managed plugin that provides MCP tools. A
+// script plugin is run, per call, in the sandbox: argv[1]="list" prints the tool
+// catalog; "call" with the tool name + args-JSON prints the result. A native
+// plugin (Native != nil) is Go code dispatched in-process instead.
 type PluginSpec struct {
 	Pool    engine.SandboxPool
 	Runtime string // python | node | bash
 	Source  string
+
+	Native NativePlugin // set => an in-process Go plugin; Pool/Runtime/Source unused
 }
 
 // MCPRouter returns the "mcp" capability over zero or more bound MCP servers:
@@ -120,6 +123,9 @@ type mcpClient struct {
 
 func (c *mcpClient) listTools(ctx context.Context) ([]map[string]any, error) {
 	if c.server.Plugin != nil {
+		if c.server.Plugin.Native != nil {
+			return c.server.Plugin.Native.Tools(), nil
+		}
 		out, err := c.server.Plugin.run(ctx, "list", "", nil)
 		if err != nil {
 			return nil, err
@@ -147,6 +153,10 @@ func (c *mcpClient) listTools(ctx context.Context) ([]map[string]any, error) {
 
 func (c *mcpClient) callTool(ctx context.Context, tool string, args map[string]any) (json.RawMessage, error) {
 	if c.server.Plugin != nil {
+		if c.server.Plugin.Native != nil {
+			text, err := c.server.Plugin.Native.Call(ctx, tool, args)
+			return toolResult(strings.TrimSpace(text), err), nil
+		}
 		argsJSON, _ := json.Marshal(args)
 		out, err := c.server.Plugin.run(ctx, "call", tool, argsJSON)
 		if err != nil {

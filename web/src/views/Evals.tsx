@@ -8,11 +8,8 @@ import type { CalibrationStats, EvalResult, EvalSuite, Golden, Script, ToolPolic
 export default function Evals({ onOpenRun }: { onOpenRun: (id: string) => void }) {
   const [scripts, setScripts] = useState<Script[]>([])
   const [sel, setSel] = useState<string | null>(null)
-  const [goldens, setGoldens] = useState<Golden[]>([])
 
   useEffect(() => { (async () => setScripts((await api.listScripts(500, 0)) || []))() }, [])
-  const loadGoldens = useCallback(async (id: string) => { setGoldens((await api.listGoldens(id)) || []) }, [])
-  useEffect(() => { if (sel) loadGoldens(sel) }, [sel, loadGoldens])
 
   return (
     <div className="layout">
@@ -29,16 +26,31 @@ export default function Evals({ onOpenRun }: { onOpenRun: (id: string) => void }
 
       <div className="main">
         {!sel && <div className="muted">Select a script to see its golden dataset.</div>}
-        {sel && <Calibration scriptId={sel} />}
-        {sel && <ToolPolicyEditor />}
-        {sel && goldens.length === 0 && (
-          <div className="muted">No goldens yet. Open a run in the Runs tab and click ⭐ Promote to add one.</div>
-        )}
-        {sel && goldens.map((g) => (
-          <GoldenCard key={g.id} golden={g} onDeleted={() => loadGoldens(sel)} onOpenRun={onOpenRun} />
-        ))}
+        {sel && <EvalsPanel scriptId={sel} onOpenRun={onOpenRun} />}
       </div>
     </div>
+  )
+}
+
+// EvalsPanel is the per-script evals surface (calibration, egress policy, and the
+// golden dataset). It is shared by the global Evals tab and a script's own Evals
+// sub-tab so both render identically from one implementation.
+export function EvalsPanel({ scriptId, onOpenRun }: { scriptId: string; onOpenRun: (id: string) => void }) {
+  const [goldens, setGoldens] = useState<Golden[]>([])
+  const loadGoldens = useCallback(async (id: string) => { setGoldens((await api.listGoldens(id)) || []) }, [])
+  useEffect(() => { loadGoldens(scriptId) }, [scriptId, loadGoldens])
+
+  return (
+    <>
+      <Calibration scriptId={scriptId} />
+      <ToolPolicyEditor />
+      {goldens.length === 0 && (
+        <div className="muted">No goldens yet. Open a run (here or in the Runs tab) and click ⭐ Promote to add one.</div>
+      )}
+      {goldens.map((g) => (
+        <GoldenCard key={g.id} golden={g} onDeleted={() => loadGoldens(scriptId)} onOpenRun={onOpenRun} />
+      ))}
+    </>
   )
 }
 

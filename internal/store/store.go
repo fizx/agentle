@@ -144,6 +144,8 @@ func (s *Store) migrate() error {
 		`ALTER TABLE scripts ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE executions ADD COLUMN actor_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE triggers ADD COLUMN actor_template TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE plugins ADD COLUMN kind TEXT NOT NULL DEFAULT 'script'`,
+		`ALTER TABLE plugins ADD COLUMN current_version INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return err
@@ -315,10 +317,21 @@ CREATE INDEX IF NOT EXISTS idx_usage_created ON usage(created_at);
 CREATE TABLE IF NOT EXISTS plugins (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'script',
   runtime TEXT NOT NULL DEFAULT 'python',
   source TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
+  current_version INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS plugin_versions (
+  plugin_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  runtime TEXT NOT NULL DEFAULT 'python',
+  source TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (plugin_id, version)
 );
 CREATE TABLE IF NOT EXISTS chats (
   id TEXT PRIMARY KEY,

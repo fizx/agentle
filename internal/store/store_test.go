@@ -356,3 +356,48 @@ func TestChatsCRUD(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
+
+func TestPluginVersioning(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+
+	// First save creates version 1.
+	if err := s.PutPlugin(ctx, Plugin{ID: "pl1", Name: "p", Runtime: "python", Source: "v1", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.GetPlugin(ctx, "pl1")
+	if p.CurrentVersion != 1 || p.Kind != PluginScript {
+		t.Fatalf("after first save: ver=%d kind=%q", p.CurrentVersion, p.Kind)
+	}
+
+	// A metadata-only change (name/enabled) does NOT bump the version.
+	_ = s.PutPlugin(ctx, Plugin{ID: "pl1", Name: "renamed", Runtime: "python", Source: "v1", Enabled: false})
+	p, _ = s.GetPlugin(ctx, "pl1")
+	if p.CurrentVersion != 1 || p.Name != "renamed" || p.Enabled {
+		t.Fatalf("metadata change bumped version or lost metadata: %+v", p)
+	}
+
+	// A source change appends version 2.
+	_ = s.PutPlugin(ctx, Plugin{ID: "pl1", Name: "renamed", Runtime: "python", Source: "v2", Enabled: true})
+	p, _ = s.GetPlugin(ctx, "pl1")
+	if p.CurrentVersion != 2 || p.Source != "v2" {
+		t.Fatalf("after source change: ver=%d src=%q", p.CurrentVersion, p.Source)
+	}
+
+	versions, _ := s.ListPluginVersions(ctx, "pl1")
+	if len(versions) != 2 || versions[0].Version != 2 || versions[1].Source != "v1" {
+		t.Fatalf("unexpected version history: %+v", versions)
+	}
+	old, err := s.GetPluginVersion(ctx, "pl1", 1)
+	if err != nil || old.Source != "v1" {
+		t.Fatalf("get version 1: %v %+v", err, old)
+	}
+
+	// Delete cascades to versions.
+	if err := s.DeletePlugin(ctx, "pl1"); err != nil {
+		t.Fatal(err)
+	}
+	if vs, _ := s.ListPluginVersions(ctx, "pl1"); len(vs) != 0 {
+		t.Fatalf("versions not deleted: %+v", vs)
+	}
+}
